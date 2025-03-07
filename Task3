@@ -1,0 +1,55 @@
+#task 3
+
+
+#opcja1
+
+# Skopiuj sieć, aby nie modyfikować oryginału
+network_option1 = copy.deepcopy(net)
+
+# Sprawdź tabelę generatorów, aby znaleźć indeks generatora na szynie 4
+# (domyślnie generator z Zadania 2 ma indeks 0)
+print("Tabela generatorów:")
+print(network_option1.gen)
+
+# Zmień napięcie generatora na 1.02 pu (dopasowanie do sieci zewnętrznej)
+network_option1.gen.at[0, 'vm_pu'] = 1.02  # 0 to indeks generatora
+
+# Przeprowadź symulację przepływu mocy
+pp.runpp(network_option1)
+
+# Wyświetl straty mocy i obciążenie linii
+print("\nWyniki po zmianie napięcia generatora:")
+print(network_option1.res_line[['pl_mw', 'loading_percent']])
+
+
+#opcja2
+
+
+# Skopiuj sieć, aby nie modyfikować oryginału
+network_option2 = copy.deepcopy(net)
+
+# Sprawdź tabelę linii, aby znaleźć indeks linii między szyną 1 a 4
+# Szyna 1 ma nazwę "Bus 1", szyna 4 – "Bus 4"
+print("Tabela linii:")
+print(network_option2.line[['from_bus', 'to_bus', 'name']])
+
+# Usuń linię o indeksie 4 (przykładowo, jeśli nazywa się "Line 5")
+pp.drop_lines(network_option2, [4])  # 4 to indeks linii
+
+# Przeprowadź symulację przepływu mocy
+pp.runpp(network_option2)
+
+# Wyświetl straty mocy i obciążenie linii
+print("\nWyniki po usunięciu linii:")
+print(network_option2.res_line[['pl_mw', 'loading_percent']])
+
+
+#Porownanie wynikow
+
+# Porównaj straty w obu opcjach
+print("Straty mocy w Opcji 1:", network_option1.res_line.pl_mw.sum(), "MW")
+print("Straty mocy w Opcji 2:", network_option2.res_line.pl_mw.sum(), "MW")
+
+# Sprawdź obciążenie linii
+print("\nMaksymalne obciążenie linii w Opcji 1:", network_option1.res_line.loading_percent.max(), "%")
+print("Maksymalne obciążenie linii w Opcji 2:", network_option2.res_line.loading_percent.max(), "%")
