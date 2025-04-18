@@ -1,0 +1,122 @@
+import time
+import logging
+import pandas as pd
+from selenium import webdriver
+from selenium.webdriver.edge.service import Service
+from selenium.webdriver.common.by import By
+from selenium.common.exceptions import (
+    NoSuchElementException,
+    TimeoutException,
+    UnexpectedAlertPresentException,
+    WebDriverException
+)
+
+# =======================
+# 1. Konfiguracja logów
+# =======================
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S"
+)
+
+# =====================
+# 2. Funkcja screenshot
+# =====================
+def take_screenshot(driver, prefix="error"):
+    ts = time.strftime("%Y-%m-%d_%H-%M-%S")
+    filename = f"{prefix}_{ts}.png"
+    try:
+        driver.save_screenshot(filename)
+        logging.info(f"Zapisano zrzut ekranu: {filename}")
+    except WebDriverException as e:
+        logging.warning(f"Nie udało się zapisać zrzutu ekranu: {e}")
+
+# ===========================================
+# 3. Dekorator globalnej obsługi wyjątków
+# ===========================================
+def global_exception_handler(func):
+    def wrapper(*args, **kwargs):
+        driver = kwargs.get("driver") or (args[0] if args else None)
+        try:
+            return func(*args, **kwargs)
+        except (NoSuchElementException, TimeoutException,
+                UnexpectedAlertPresentException, WebDriverException) as e:
+            logging.error(f"Błąd w funkcji '{func.__name__}': {e}")
+            if driver:
+                take_screenshot(driver, prefix=func.__name__)
+            # dalej przekazujemy wyjątek, żeby pętla główna mogła go złapać
+            raise
+    return wrapper
+
+# ===========================================
+# 4. Funkcja logowania – użyj właściwych selektorów
+# ===========================================
+@global_exception_handler
+def login_to_service(driver, login_url, username, password):
+    driver.get(login_url)
+    # Przykładowe selektory – zmodyfikuj według realnej strony:
+    driver.find_element(By.ID, "username").clear()
+    driver.find_element(By.ID, "username").send_keys(username)
+    driver.find_element(By.ID, "password").clear()
+    driver.find_element(By.ID, "password").send_keys(password)
+    driver.find_element(By.ID, "submit").click()
+    # opcjonalnie: czekaj na element potwierdzający udane logowanie
+    time.sleep(2)
+
+# ======================
+# 5. Pętla główna (run)
+# ======================
+def run(excel_path, driver_path):
+    # 5.1. Wczytaj dane wsadowe z Excela
+    df = pd.read_excel(excel_path)
+    required_cols = {"login_url", "użytkownik", "hasło"}
+    if not required_cols.issubset(df.columns):
+        raise ValueError(f"Brakuje kolumn w Excelu, potrzebne: {required_cols}")
+
+    # 5.2. Konfiguracja Edge
+    edge_options = webdriver.EdgeOptions()
+    edge_options.add_experimental_option('excludeSwitches', ['enable-logging'])
+    edge_options.add_argument("--start-maximized")
+    edge_options.add_argument("--disable-notifications")
+    service = Service(driver_path)
+
+    driver = None
+    try:
+        driver = webdriver.Edge(service=service, options=edge_options)
+
+        # 5.3. Iteruj po każdym rekordzie
+        for idx, row in df.iterrows():
+            login_url = row["login_url"]
+            user = row["użytkownik"]
+            pwd = row["hasło"]
+            logging.info(f"Rekord {idx}: loguję '{user}' na '{login_url}'")
+
+            try:
+                login_to_service(
+                    driver=driver,
+                    login_url=login_url,
+                    username=user,
+                    password=pwd
+                )
+                logging.info(f"Rekord {idx}: zalogowano pomyślnie.")
+                # tu możesz dodać dalsze kroki po zalogowaniu
+                # np. driver.get(...), przetwarzanie, wylogowanie, itp.
+
+            except Exception as e:
+                logging.warning(f"Rekord {idx}: wystąpił błąd – przechodzę do następnego. {e}")
+                continue
+
+    finally:
+        if driver:
+            driver.quit()
+            logging.info("Przeglądarka zamknięta.")
+
+# =====================
+# 6. Start programu
+# =====================
+if __name__ == "__main__":
+    # Podaj ścieżkę do pliku Excel i do sterownika Edge:
+    EXCEL_PATH    = "dane_logowania.xlsx"
+    EDGE_DRIVER   = "C:/drivers/msedgedriver.exe"
+    run(EXCEL_PATH, EDGE_DRIVER)
