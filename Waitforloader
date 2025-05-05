@@ -34,3 +34,23 @@ for data in dane_do_wprowadzenia:
     input_element.send_keys(data)
 
     # Inne akcje, które chcesz wykonać po wprowadzeniu danych
+
+
+def wait_for_loader_to_disappear(driver, loader_locator, check_interval=1, timeout=60):
+    end_time = time.time() + timeout
+    while time.time() < end_time:
+        try:
+            # Sprawdź, czy loader jest widoczny
+            loader = driver.find_element(*loader_locator)
+            if loader.is_displayed():
+                print("Loader jest widoczny, czekam...")
+                time.sleep(check_interval)
+            else:
+                print("Loader zniknął, kontynuuję...")
+                break
+        except:
+            # Jeśli element nie istnieje, uznajemy, że loader zniknął
+            print("Loader nie znaleziony, kontynuuję...")
+            break
+
+# Przykładowe działania
