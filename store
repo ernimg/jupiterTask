@@ -282,3 +282,95 @@ export const userAuthStore = defineStore('auth', {
     }
 
 })
+
+
+
+
+
+
+
+
+
+
+import { defineStore } from "pinia";
+
+export const userAuthStore = defineStore('auth', {
+  state: () => ({
+    userInfo: null,
+    token: sessionStorage.getItem('authToken') || null,
+    isAuthenticated: false,
+  }),
+
+  actions: {
+    async loginToApp(credentials) {
+      try {
+        const response = await fetch("http://localhost:8080/auth/login", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(credentials)
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.message);
+
+        sessionStorage.setItem("authToken", data.token);
+        this.token = data.token;
+        await this.checkAuth();
+      } catch (err) {
+        console.error(err);
+      }
+    },
+
+    async checkAuth() {
+      const token = sessionStorage.getItem("authToken");
+      if (!token) { this.isAuthenticated = false; this.userInfo = null; return false; }
+
+      try {
+        const response = await fetch("http://localhost:8080/auth/authToken", {
+          method: "POST",
+          headers: { "Authorization": `Bearer ${token}` }
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error("Token nieważny");
+
+        this.isAuthenticated = data.isAuthenticated;
+        this.userInfo = data.user;
+        return true;
+      } catch (err) {
+        console.error(err);
+        this.exitApp();
+        return false;
+      }
+    },
+
+    async refreshToken() {
+      const oldToken = sessionStorage.getItem('authToken');
+      if (!oldToken) return;
+
+      try {
+        const response = await fetch("http://localhost:8080/auth/refresh-token", {
+          method: "POST",
+          headers: { "Authorization": `Bearer ${oldToken}` }
+        });
+        const data = await response.json();
+        if (response.ok) {
+          sessionStorage.setItem('authToken', data.token);
+          this.token = data.token;
+          await this.checkAuth();
+        } else {
+          this.exitApp();
+        }
+      } catch (err) {
+        console.error(err);
+        this.exitApp();
+      }
+    },
+
+    exitApp() {
+      sessionStorage.removeItem("authToken");
+      this.token = null;
+      this.userInfo = null;
+      this.isAuthenticated = false;
+    }
+  }
+});
+
