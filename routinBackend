@@ -1,0 +1,17 @@
+const express = require('express');
+const router = express.Router();
+const authControler = require('../controller/auth');
+const ladapAuth = require('../middleware/ldapAuth');
+
+router.post('/login',ladapAuth,authControler.login);
+router.get("/veryfy/:id",authControler.getVeryfyIsUserDB);
+router.post('/logToApp',authControler.loginApp);
+router.get('/allUser',authControler.getAllUser);
+router.post('/refresh-token',authControler.refresTokenApp);
+router.post('/logout',authControler.logOut);
+router.post('/authToken',authControler.authenticateToken);
+router.delete('/rmUser/:id',authControler.rmUser);
+router.post('/createUser',authControler.createUser);
+
+
+module.exports = router;
