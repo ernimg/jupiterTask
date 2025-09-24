@@ -161,6 +161,157 @@ exports.createUser = async (req,res)=>{
     }
 }
 
+const oracledb = require('oracledb');
+const jwt = require('jsonwebtoken');
+const dbConfig = require('../config/oracleConfig');
+
+const SECRET_KEY = process.env.JWT_SECRET_KEY || "!dscd.ADERDcv@111234rd";
+
+// Generowanie tokenu JWT
+function genToken(user) {
+  const payload = {
+    name: user.imie,
+    surname: user.nazwisko,
+    role: user.rola,
+    permissions: user.permissions || [],
+    userId: user.numer,
+    mail: user.mail
+  };
+  return jwt.sign(payload, SECRET_KEY, { expiresIn: '30m' });
+}
+
+// Odświeżanie tokena
+function refreshToken(oldToken) {
+  try {
+    const payload = jwt.verify(oldToken, SECRET_KEY, { ignoreExpiration: true });
+    return genToken(payload);
+  } catch (err) {
+    throw new Error('Invalid Token');
+  }
+}
+
+// Middleware JWT
+exports.authenticateToken = (req, res, next) => {
+  const authHeader = req.headers['authorization'];
+  const token = authHeader?.split(' ')[1];
+  if (!token) return res.status(401).json({ message: "Brak autoryzacji" });
+
+  jwt.verify(token, SECRET_KEY, (err, user) => {
+    if (err) return res.status(403).json({ message: "Nieważny token" });
+    req.user = user;
+    next();
+  });
+};
+
+// Login (LDAP + DB -> JWT)
+exports.loginApp = async (req, res) => {
+  const { userId } = req.body;
+  let connection;
+
+  try {
+    connection = await oracledb.getConnection(dbConfig);
+
+    const query = `
+      SELECT imie, nazwisko, numer, mail, rola
+      FROM uft_users
+      WHERE numer = :id
+    `;
+    const result = await connection.execute(query, [userId]);
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ message: "Nie znaleziono użytkownika w DB" });
+    }
+
+    const [imie, nazwisko, numer, mail, rola] = result.rows[0];
+
+    // mapowanie roli na permissions
+    const permissions = rola === "admin"
+      ? ["view_servers", "view_cognos", "create_task", "view_tasks", "admin_access"]
+      : ["view_servers", "view_tasks"];
+
+    const user = { imie, nazwisko, numer, mail, rola, permissions };
+    const token = genToken(user);
+
+    res.json({ message: "Zalogowano pomyślnie", token });
+
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: "Błąd logowania" });
+  } finally {
+    if (connection) await connection.close();
+  }
+};
+
+// Sprawdzanie tokena
+exports.checkToken = (req, res) => {
+  res.json({ user: req.user, isAuthenticated: true });
+};
+
+// Odświeżanie tokena
+exports.refreshTokenApp = (req, res) => {
+  const oldToken = req.headers.authorization?.split(' ')[1];
+  if (!oldToken) return res.status(401).json({ message: "Brak tokenu do odświeżenia" });
+
+  try {
+    const newToken = refreshToken(oldToken);
+    res.json({ message: "Odświeżono token", token: newToken });
+  } catch (err) {
+    res.status(401).json({ message: "Nieważny token" });
+  }
+};
+
+// Pobranie wszystkich użytkowników
+exports.getAllUser = async (req, res) => {
+  let connection;
+  try {
+    connection = await oracledb.getConnection(dbConfig);
+    const query = `SELECT imie, nazwisko, numer, mail, rola FROM uft_users`;
+    const result = await connection.execute(query);
+    res.json(result.rows);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: "Błąd pobierania użytkowników" });
+  } finally {
+    if (connection) await connection.close();
+  }
+};
+
+// Tworzenie użytkownika
+exports.createUser = async (req, res) => {
+  const { imie, nazwisko, numer, mail, rola } = req.body;
+  let connection;
+  try {
+    connection = await oracledb.getConnection(dbConfig);
+    const query = `
+      INSERT INTO uft_users (imie, nazwisko, numer, mail, rola, date_create)
+      VALUES (:imie, :nazwisko, :numer, :mail, :rola, SYSDATE)
+    `;
+    await connection.execute(query, [imie, nazwisko, numer, mail, rola], { autoCommit: true });
+    res.json({ message: "Użytkownik utworzony" });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: "Błąd tworzenia użytkownika" });
+  } finally {
+    if (connection) await connection.close();
+  }
+};
+
+// Usuwanie użytkownika
+exports.rmUser = async (req, res) => {
+  const { id } = req.params;
+  let connection;
+  try {
+    connection = await oracledb.getConnection(dbConfig);
+    const query = `DELETE FROM uft_users WHERE numer = :id`;
+    await connection.execute(query, [id], { autoCommit: true });
+    res.json({ message: "Użytkownik usunięty" });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: "Błąd usuwania użytkownika" });
+  } finally {
+    if (connection) await connection.close();
+  }
+};
 
  
 
