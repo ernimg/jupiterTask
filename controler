@@ -1,0 +1,167 @@
+const oracledb = require('oracledb');
+const jwt = require('jsonwebtoken');
+const dbConfig = require('../config/oracleConfig')
+
+const SECRET_KEY = process.env.JWT_SECRET_KEY || "!dscd.ADERDcv@111234rd";
+
+
+
+function genToken(user) {
+    const payload = {
+        name: user.name,
+        surname: user.surname,
+        role: user.role,
+        userId: user.userId
+    }
+    return jwt.sign(payload, SECRET_KEY, { expiresIn: '30m' });
+}
+
+function refreshToken(oldToken) {
+    try {
+        const payload = jwt.verify(oldToken, SECRET_KEY, { ignoreExpiration: true })
+        return genToken(payload);
+    } catch (error) {
+        throw new Error('Invalid Token');
+    }
+}
+exports.loginApp = (req, res) => {
+    const user = req.body;
+    const token = genToken(user);
+    res.json({message:'Zalogowano pomyślnie',token,});
+}
+exports.refresTokenApp = (req,res)=>{
+    const oldToken =req.headers.authorization.split(' ')[1];
+    console.log('stary token')
+    // console.log(decodeJWT(oldToken));
+    if(!oldToken){
+        res.status(401).json({message:"brak tokenu do odświerzenia"});
+    }
+    try{
+        const newToken = refreshToken(oldToken)
+        res.json({message:'Odswieżono token',token:newToken});
+    }catch (err){
+        res.status(401).json({message:"Invalid tokken"});
+    }
+}
+exports.authenticateToken = (req,res,next)=>{
+    const token = req.headers.authorization.split(' ')[1];
+    if(!token) return res.status(401).json({message:"brak autoryzacji"});
+    jwt.verify(token,SECRET_KEY,(err,user)=>{
+        if(err){
+            console.log(err)
+            return res.status(401).json({message:"Niewazny token",isAuthenticated:false});
+        } 
+        res.status(200).json({user,isAuthenticated:true})
+
+        next();
+    })
+}
+
+
+exports.logOut = (req,res) =>{
+
+    res.json({message:'wylogowano pomyślnie'});
+}
+
+exports.login = (req,res)=>{
+    res.status(200).json(req.user)
+};
+
+exports.getVeryfyIsUserDB = async (req,res)=>{
+    const userId = req.params.id;
+    const query = `select imie,nazwisko,numer,mail,rola,date_create from uft_users where numer='${userId}'`
+    let connection;
+    try {
+        connection = await oracledb.getConnection(dbConfig);
+        const result = await connection.execute(query);
+        res.json(result.rows);
+    } catch (err) {
+        console.error(err);
+        res.status(500).send('Error connection to DB')
+    } finally {
+        if (connection) {
+            try {
+                await connection.close();
+            } catch (err) {
+                console.error(err)
+            }
+        }
+    }
+}
+
+exports.getAllUser = async (req,res)=>{
+    const userId = req.params.id;
+    console.log(userId)
+    const query = `select imie,nazwisko,numer,mail,rola,date_create from uft_users`;
+    console.log(query)
+    let connection;
+    try {
+        connection = await oracledb.getConnection(dbConfig);
+        const result = await connection.execute(query);
+        res.json(result.rows);
+    } catch (err) {
+        console.error(err);
+        res.status(500).send('Error connection to DB')
+    } finally {
+        if (connection) {
+            try {
+                await connection.close();
+            } catch (err) {
+                console.error(err)
+            }
+        }
+    }
+}
+
+exports.rmUser = async (req,res)=>{
+    const nrACC = req.params.id;
+    console.log(nrACC)
+    const query = `DELETE FROM UFT_USERS WHERE NUMER ='${nrACC}'`;
+    console.log(query)
+    let connection;
+    try {
+        connection = await oracledb.getConnection(dbConfig);
+        const result = await connection.execute(query);
+        console.log(result.rows);
+    } catch (err) {
+        console.error(err);
+        res.status(500).send('Error connection to DB')
+    } finally {
+        if (connection) {
+            try {
+                await connection.close();
+            } catch (err) {
+                console.error(err)
+            }
+        }
+    }
+}
+
+exports.createUser = async (req,res)=>{
+    const addACC = req.body;
+    console.log(addACC)
+    const query = `INSERT INTO UFT_USERS (IMIE, NAZWISKO, NUMER, MAIL, ROLA, DATE_CREATE) VALUES ('${addACC.name}', '${addACC.surname}', '${addACC.employid}', '${addACC.email}', '${addACC.role}', SYSDATE)`
+    console.log(query)
+    let connection;
+    try {
+        connection = await oracledb.getConnection(dbConfig);
+        const result = await connection.execute(query);
+        console.log(result.rows);
+    } catch (err) {
+        console.error(err);
+        res.status(500).send('Error connection to DB')
+    } finally {
+        if (connection) {
+            try {
+                await connection.close();
+            } catch (err) {
+                console.error(err)
+            }
+        }
+    }
+}
+
+
+ 
+
+ 
