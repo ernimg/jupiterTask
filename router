@@ -1,0 +1,88 @@
+import { createRouter, createWebHistory } from "vue-router";
+import ServersBoard from "./pages/ServersBoard.vue";
+import CognosSrvers from './pages/CognosSrvers.vue'
+import CreateTask from "./pages/CreateTask.vue";
+import AllTasks from "./pages/AllTasks.vue";
+import AdminPanel from "./pages/AdminPanel.vue";
+import { userAuthStore } from "../store/auth";
+import LogIn from "./pages/LogIn.vue";
+const router = createRouter({
+  history: createWebHistory(process.env.BASE_URL),
+  routes: [
+    { path: "/auth", name: "Login", component: LogIn },
+    { 
+      path: "/servers", 
+      name: "Home", 
+      component: ServersBoard, 
+      meta: { 
+        requiresAuth: true,
+        requiredPermissions: ["view_servers"] // Dodaj uprawnienia
+      } 
+    },
+    { 
+      path: "/serversCognos", 
+      name: "Cognos", 
+      component: CognosSrvers, 
+      meta: { 
+        requiresAuth: true,
+        requiredPermissions: ["view_cognos"] 
+      } 
+    },
+    { 
+      path: "/createTask", 
+      component: CreateTask, 
+      meta: { 
+        requiresAuth: true,
+        requiredPermissions: ["create_task"] 
+      } 
+    },
+    { 
+      path: "/allTask", 
+      component: AllTasks, 
+      meta: { 
+        requiresAuth: true,
+        requiredPermissions: ["view_tasks"] 
+      } 
+    },
+    { 
+      path: "/adminPanel", 
+      component: AdminPanel, 
+      meta: { 
+        requiresAuth: true,
+        requiredRole: "admin" // Lub requiredPermissions: ["admin_access"]
+      } 
+    },
+    { path: "/:notFound(.*)", redirect: "/allTask" },
+  ]
+});
+
+
+
+
+
+
+router.beforeEach(async(to, _, next) => {
+  const authStore = userAuthStore();
+  
+
+  if (to.matched.some(record => record.meta.requiresAuth)) {
+    const isAuth = await authStore.checkAuth();
+    // console.log("uzytkownik",authStore.user);
+  
+    if (isAuth) {
+      next();
+    } else {
+      next({ path: "/auth" })
+    }
+  } else {
+    next();
+  }
+})
+
+
+
+
+
+
+
+export default router
