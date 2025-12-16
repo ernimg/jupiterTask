@@ -1,0 +1,1948 @@
+import pandas as pd
+import time
+import re
+import logging
+from selenium import webdriver
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.edge.options import Options
+from selenium.webdriver.edge.service import Service
+from selenium.webdriver.common.by import By
+from selenium.webdriver.common.keys import Keys
+from colorist import Color
+from selenium.webdriver.common.action_chains import ActionChains
+from selenium.common.exceptions import NoSuchElementException, StaleElementReferenceException, TimeoutException
+from typing import List, Dict
+from selenium.common.exceptions import NoAlertPresentException
+from selenium.webdriver.support.ui import Select
+from datetime import datetime
+from typing import Optional
+import re
+from difflib import SequenceMatcher
+
+import users
+
+class CCB:
+    def write_file_log(self, filename, comment):
+        c = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime())
+        print(f'{comment}')
+        f = open(filename, 'a', encoding='utf8')
+        f.write(f'{c} {comment} \n')
+        f.close()
+    #
+    def Edit_Properties(self, xvalue, attribute):
+        return self.driver.find_element(by=By.XPATH, value=xvalue).get_attribute(attribute)
+
+    def close_browser(self):
+        self.driver.close()
+    def set_browser_zoom(self, zoom_level: float):
+        """
+        Ustawia poziom powiększenia (zoom) w przeglądarce Edge na poziomie renderowania.
+        Działa przez Chrome DevTools Protocol (CDP), bez modyfikacji DOM ani symulacji klawiszy.
+        
+        :param zoom_level: Wartość dziesiętna (np. 0.65 = 65%, 1.0 = 100%)
+        """
+        try:
+            self.driver.execute_cdp_cmd("Emulation.setDeviceMetricsOverride", {
+                "width":  self.driver.execute_script("return window.outerWidth;"),
+                "height": self.driver.execute_script("return window.outerHeight;"),
+                "deviceScaleFactor": zoom_level,  # Skalowanie całego interfejsu
+                "mobile": False,
+                "screenOrientation": {"angle": 0, "type": "portraitPrimary"},
+                "scale": 1
+            })
+            self.write_file_log("log.txt", f"🔍 Zoom przeglądarki ustawiony na {int(zoom_level * 100)}%")
+        except Exception as e:
+            # Jeśli CDP nie wspiera tej komendy, zaloguj błąd
+            self.write_file_log("log.txt", f"❌ Nie udało się ustawić zoomu: {str(e)}")
+
+    def open_browser(self, browser, window_browser, page):
+        if browser == 'EDGE':
+            options = Options()
+            # options.add_argument("--headless")  # Uruchamia przeglądarkę w trybie headless (bez GUI)
+            options.add_argument("--disable-gpu")  # Opcja, aby wyłączyć akcelerację GPU (dla stabilności w headless)
+            edge_driver_path = r"C:\\AUTOMATYZACJA\\Webdriver\\msedgedriver.exe"
+            service = Service(executable_path=edge_driver_path)
+            self.driver = webdriver.Edge(service=service, options=options)
+      
+       
+        elif browser == 'CHROME':
+            driver = webdriver.Chrome()
+
+        if window_browser == 'tak':
+            self.driver.maximize_window()
+            time.sleep(1)
+        # otwieramy stronę
+        self.driver.get(page)
+
+    #####################
+    # Inicjacja skryptu #
+    #####################
+    #
+
+    def browser_type(self, browser):
+        if browser == 'CHROME':
+            self.driver = webdriver.Chrome()
+        elif browser == 'FIREFOX':
+            self.driver = webdriver.Firefox()
+        elif browser == 'EDGE':
+            options = Options()
+            options.add_argument("--headless")  # Uruchamia przeglądarkę w trybie headless (bez GUI)
+            options.add_argument("--disable-gpu")  # Opcja, aby wyłączyć akcelerację GPU (dla stabilności w headless)
+            edge_driver_path = r"C:\\AUTOMATYZACJA\\Webdriver\\msedgedriver.exe"
+            service = Service(executable_path=edge_driver_path)
+            self.driver = webdriver.Edge(service=service, options=options)
+            self.driver = webdriver.Edge()
+        self.index = 0
+
+    #
+    def get_page(self, server):
+        if server == 'PROD':
+            self.driver.get('https://sos-ccb-eop.energa.loc/ouaf/loginPage.jsp')
+        elif server == 'UAT':
+            self.driver.get('https://sopv-ccb-uatv26.energa.loc/ouaf/loginPage.jsp')
+
+    #
+    def log_in(self):
+        self.driver.find_element(By.ID, 'userId').send_keys(users.my_login)
+        self.driver.find_element(By.ID, 'password').send_keys(users.my_password, Keys.RETURN)
+    def compare_names_similarity(self, name1, name2):
+        import re
+        from difflib import SequenceMatcher
+
+        def normalize_text(text):
+            """Normalizuje tekst do porównania - ulepszona wersja z pełną obsługą form prawnych"""
+            if not text or str(text).strip().lower() in ["NaN", "nan", "none"]:
+                return ""
+
+            # Konwersja na string, małe litery, obcinanie
+            text = str(text).lower().strip()
+            
+            # Zamiana polskich znaków
+            polish_chars = {
+                'ą': 'a', 'ć': 'c', 'ę': 'e', 'ł': 'l', 'ń': 'n', 
+                'ó': 'o', 'ś': 's', 'ź': 'z', 'ż': 'z'
+            }
+            for polish, basic in polish_chars.items():
+                text = text.replace(polish, basic)
+            
+            # Usuń znaki interpunkcyjne i zbędne spacje
+            text = re.sub(r'[^\w\s]', ' ', text)
+            text = re.sub(r'\s+', ' ', text).strip()
+            
+            # *** NOWE: usuwanie typów ulic ***
+            # ul., ulica, al., aleja, pl., plac, os., osiedle, skwer, rondo itp.
+            street_prefixes = [
+                r'\bul\.?\b',
+                r'\bulica\b',
+                r'\bal\.?\b',
+                r'\baleja\b',
+                r'\bpl\.?\b',
+                r'\bplac\b',
+                r'\bos\.?\b',
+                r'\bosiedle\b',
+                r'\bskwer\b',
+                r'\brondo\b'
+            ]
+            for pattern in street_prefixes:
+                text = re.sub(pattern, ' ', text)
+
+            # ponownie zbij nadmiarowe spacje po usunięciu prefiksów
+            text = re.sub(r'\s+', ' ', text).strip()
+
+
+            # --- KLUCZOWE: Pełna obsługa form prawnych ---
+            # Spółka z ograniczoną odpowiedzialnością (wszystkie warianty)
+            text = re.sub(r'\bsp\s*z\s*o\s*o\s*\b', 'spolka z ograniczona odpowiedzialnoscia', text)
+            text = re.sub(r'\bsp\.?\s*z\.?\s*o\.?o\.?\b', 'spolka z ograniczona odpowiedzialnoscia', text)
+            text = re.sub(
+                r'\bsp[oó]lka\s+z\s+ograniczon[aą]\s+odpowiedzialno[sś][ci]\b',
+                'spolka z ograniczona odpowiedzialnoscia',
+                text
+            )
+
+            # Spółka akcyjna
+            text = re.sub(r'\bs\.?a\.?\b', 'spolka akcyjna', text)
+            text = re.sub(r'\bsp[oó]lka\s+akcyjna\b', 'spolka akcyjna', text)
+
+            # Prosta spółka akcyjna
+            text = re.sub(r'\bp\.?s\.?a\.?\b', 'prosta spolka akcyjna', text)
+            text = re.sub(r'\bprosta\s+sp[oó]lka\s+akcyjna\b', 'prosta spolka akcyjna', text)
+
+            # Spółka jawna
+            text = re.sub(r'\bsp\.?\s*j\.?\b', 'spolka jawna', text)
+            text = re.sub(r'\bsp[oó]lka\s+jawna\b', 'spolka jawna', text)
+
+            # Spółka partnerska
+            text = re.sub(r'\bsp\.?\s*p\.?\b', 'spolka partnerska', text)
+            text = re.sub(r'\bsp[oó]lka\s+partnerska\b', 'spolka partnerska', text)
+
+            # Spółka komandytowa
+            text = re.sub(r'\bsp\.?\s*k\.?\b', 'spolka komandytowa', text)
+            text = re.sub(r'\bsp[oó]lka\s+komandytowa\b', 'spolka komandytowa', text)
+
+            # Unifikuj słowa kluczowe
+            text = re.sub(r'\bodpowiedzialnosci?\b', 'odpowiedzialnosc', text)
+            text = re.sub(r'\bakcyjn[ae]?\b', 'akcyjna', text)
+            text = re.sub(r'\bjawn[ae]?\b', 'jawna', text)
+            text = re.sub(r'\bkomandytn[ae]?\b', 'komandytowa', text)
+            text = re.sub(r'\bpartner(?:ski|ska)?\b', 'partnerska', text)
+
+            return text.strip()
+
+        def jaro_winkler_similarity(s1, s2):
+            """Oblicza podobieństwo Jaro-Winkler"""
+            if not s1 or not s2:
+                return 0.0
+            if s1 == s2:
+                return 1.0
+            
+            len1, len2 = len(s1), len(s2)
+            match_window = max(len1, len2) // 2 - 1
+            match_window = max(0, match_window)
+            
+            s1_matches = [False] * len1
+            s2_matches = [False] * len2
+            matches = 0
+            
+            for i in range(len1):
+                start = max(0, i - match_window)
+                end = min(i + match_window + 1, len2)
+                
+                for j in range(start, end):
+                    if s2_matches[j] or s1[i] != s2[j]:
+                        continue
+                    s1_matches[i] = s2_matches[j] = True
+                    matches += 1
+                    break
+            
+            if matches == 0:
+                return 0.0
+            
+            k = 0
+            transpositions = 0
+            for i in range(len1):
+                if not s1_matches[i]:
+                    continue
+                while not s2_matches[k]:
+                    k += 1
+                if s1[i] != s2[k]:
+                    transpositions += 1
+                k += 1
+            
+            jaro = (matches / len1 + matches / len2 + (matches - transpositions/2) / matches) / 3
+            
+            prefix = 0
+            for i in range(min(len(s1), len(s2), 4)):
+                if s1[i] == s2[i]:
+                    prefix += 1
+                else:
+                    break
+            
+            return jaro + prefix * 0.1 * (1 - jaro)
+
+        def token_similarity(s1, s2):
+            """Oblicza podobieństwo na podstawie tokenów (słów)"""
+            tokens1 = set(s1.split())
+            tokens2 = set(s2.split())
+            
+            if not tokens1 and not tokens2:
+                return 1.0
+            if not tokens1 or not tokens2:
+                return 0.0
+            
+            intersection = len(tokens1.intersection(tokens2))
+            union = len(tokens1.union(tokens2))
+            return intersection / union if union > 0 else 0.0
+
+        # --- GŁÓWNA LOGIKA ---
+        norm1 = normalize_text(name1)
+        norm2 = normalize_text(name2)
+
+        # Sprawdź przypadki graniczne
+        if not norm1 and not norm2:
+            return {
+                'similarity_percentage': 100.0,
+                'differences': [],
+                'normalized_comparison': 'Oba teksty są puste',
+                'analysis_method': 'empty_comparison'
+            }
+
+        if not norm1 or not norm2:
+            return {
+                'similarity_percentage': 0.0,
+                'differences': [f"Jedna z nazw jest pusta: '{name1}' vs '{name2}'"],
+                'normalized_comparison': f"'{norm1}' vs '{norm2}'",
+                'analysis_method': 'empty_field'
+            }
+
+        # Oblicz podobieństwa różnymi metodami
+        jaro_sim = jaro_winkler_similarity(norm1, norm2)
+        token_sim = token_similarity(norm1, norm2)
+        seq_sim = SequenceMatcher(None, norm1, norm2).ratio()
+
+        # Kombinuj wyniki z wagami
+        weights = [0.4, 0.35, 0.25]  # jaro_winkler, token, sequence
+        combined_sim = (
+            jaro_sim * weights[0] + 
+            token_sim * weights[1] + 
+            seq_sim * weights[2]
+        ) * 100
+
+        # Znajdź różnice
+        differences = []
+        words1 = norm1.split()
+        words2 = norm2.split()
+
+        extra_words = set(words1) - set(words2)
+        if extra_words:
+            differences.append(f"Nazwa z CC&B: {', '.join(sorted(extra_words))}")
+
+        missing_words = set(words2) - set(words1)
+        if missing_words:
+            differences.append(f"Nazwa z excel: {', '.join(sorted(missing_words))}")
+
+        # Porównanie znak po znaku (tylko jeśli długości są bliskie)
+        if abs(len(words1) - len(words2)) <= 2:
+            matcher = SequenceMatcher(None, norm1, norm2)
+            for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+                if tag == 'replace' and len(norm1[i1:i2]) > 1 and len(norm2[j1:j2]) > 1:
+                    differences.append(f"Zamiana: '{norm1[i1:i2]}' → '{norm2[j1:j2]}'")
+                elif tag == 'delete' and len(norm1[i1:i2]) > 1:
+                    differences.append(f"Usunięte: '{norm1[i1:i2]}'")
+                elif tag == 'insert' and len(norm2[j1:j2]) > 1:
+                    differences.append(f"Dodane: '{norm2[j1:j2]}'")
+
+        # Określ metodę analizy
+        method = 'combined'
+        if jaro_sim >= 0.85:
+            method = 'jaro_winkler'
+        elif token_sim >= 0.8:
+            method = 'token_based'
+        elif seq_sim >= 0.8:
+            method = 'sequence_matching'
+
+        return {
+            'similarity_percentage': round(combined_sim, 2),
+            'differences': differences if differences else ['Teksty są identyczne'],
+            'normalized_comparison': f"'{norm1}' vs '{norm2}'",
+            'analysis_method': method,
+            'jaro_winkler_score': round(jaro_sim * 100, 2),
+            'token_score': round(token_sim * 100, 2),
+            'sequence_score': round(seq_sim * 100, 2)
+        }
+
+    # Funkcja pomocnicza do pracy z listami
+    def compare_multiple_names(self,name_to_find, name_list, min_similarity=70):
+        """
+        Porównuje jedną nazwę z listą innych nazw
+        
+        Args:
+            name_to_find (str): Nazwa do znalezienia
+            name_list (list): Lista nazw do porównania
+            min_similarity (float): Minimalne podobieństwo do pokazania
+        
+        Returns:
+            list: Lista dopasowanych wyników posortowanych według podobieństwa
+        """
+        results = []
+        
+        for name in name_list:
+            result = self.compare_names_similarity(name_to_find, name)
+            results.append({
+                'reference_name': name_to_find,
+                'matched_name': name,
+                'similarity': result['similarity_percentage'],
+                'differences': result['differences']
+            })
+        
+        # Filtruj i sortuj wyniki
+        filtered_results = [r for r in results if r['similarity'] >= min_similarity]
+        return sorted(filtered_results, key=lambda x: x['similarity'], reverse=True)
+    
+    def detect_date_format(self,date_string):
+        # Funkcja normalizująca niestandardowe znaki
+        def normalize_date_string(s):
+            # Zamienia niestandardowe myślniki na standardowy myślnik
+            non_standard_dashes = '‑–—―'  # en dash, em dash, horizontal bar
+            standard_dash = '-'
+            translation_table = str.maketrans(non_standard_dashes, standard_dash * len(non_standard_dashes))
+            return s.translate(translation_table)
+        
+        # Normalizuj string
+        normalized_string = normalize_date_string(date_string)
+        
+        # Lista formatów z czasem
+        date_time_formats = [
+            "%Y-%m-%d %H:%M:%S",   # 2024-07-24 12:13:59
+            "%d-%m-%Y %H:%M:%S",   # 24-07-2024 12:13:59
+            "%m-%d-%Y %H:%M:%S",   # 07-24-2024 12:13:59
+            "%Y/%m/%d %H:%M:%S",   # 2024/07/24 12:13:59
+            "%d/%m/%Y %H:%M:%S",   # 24/07/2024 12:13:59
+            "%m/%d/%Y %H:%M:%S",   # 07/24/2024 12:13:59
+            "%Y.%m.%d %H:%M:%S",   # 2024.07.24 12:13:59
+            "%d.%m.%Y %H:%M:%S",   # 24.07.2024 12:13:59
+            "%m.%d.%Y %H:%M:%S",   # 07.24.2024 12:13:59
+            "%d %B %Y %H:%M:%S",   # 24 July 2024 12:13:59
+            "%B %d, %Y %H:%M:%S",  # July 24, 2024 12:13:59
+            "%b %d, %Y %H:%M:%S",  # Jul 24, 2024 12:13:59
+            "%Y%m%d %H:%M:%S",     # 20240724 12:13:59
+            "%d-%b-%Y %H:%M:%S",   # 24-Jul-2024 12:13:59
+            "%b-%d-%Y %H:%M:%S",   # Jul-24-2024 12:13:59
+            "%d %b %Y %H:%M:%S",   # 24 Jul 2024 12:13:59
+            "%H:%M:%S %d-%m-%Y",   # 12:13:59 24-07-2024
+            "%H:%M:%S %Y-%m-%d",   # 12:13:59 2024-07-24
+        ]
+        
+        # Lista formatów bez czasu
+        date_formats = [
+            "%Y-%m-%d",       # 2024-07-24
+            "%d-%m-%Y",       # 24-07-2024
+            "%m-%d-%Y",       # 07-24-2024
+            "%Y/%m/%d",       # 2024/07/24
+            "%d/%m/%Y",       # 24/07/2024
+            "%m/%d/%Y",       # 07/24/2024
+            "%Y.%m.%d",       # 2024.07.24
+            "%d.%m.%Y",       # 24.07.2024
+            "%m.%d.%Y",       # 07.24.2024
+            "%d %B %Y",       # 24 July 2024
+            "%B %d, %Y",      # July 24, 2024
+            "%b %d, %Y",      # Jul 24, 2024
+            "%Y%m%d",         # 20240724
+            "%d-%b-%Y",       # 24-Jul-2024
+            "%b-%d-%Y",       # Jul-24-2024
+            "%d %b %Y",       # 24 Jul 2024
+        ]
+        
+        # Połącz formaty (najpierw z czasem, potem bez)
+        combined_formats = date_time_formats + date_formats
+        
+        # Sprawdź każdy format
+        for fmt in combined_formats:
+            try:
+                datetime.strptime(normalized_string, fmt)
+                return fmt
+            except ValueError:
+                continue
+        
+        return None
+
+    def ile_dni_minelo(self, data_string: str) -> int | None:
+        
+        if not data_string:
+                print(f"Błąd: Próba przetworzenia pustej daty.")
+                return None
+        data_string_czysta = data_string[:2] + "-" + data_string[3:5] + "-" + data_string[6:10] + " " + data_string[11:13] + ":" + data_string[14:16] + ":" + data_string[17:]
+        try:
+            data_wejsciowa_dt = datetime.strptime(data_string_czysta,"%d-%m-%Y %H:%M:%S")
+            print("data wyejsciowa",data_wejsciowa_dt)
+            aktualna_data_dt = datetime.now()
+            roznica = aktualna_data_dt - data_wejsciowa_dt
+            return roznica.days
+        except ValueError as val:
+            print(val)
+            print(f"Błąd: Nieprawidłowy format daty '{data_string}'. Po oczyszczeniu nadal nie pasuje do DD-MM-YYYY HH:MM:SS.")
+            return None
+        except Exception as e:
+            print(f"Wystąpił nieoczekiwany błąd podczas przetwarzania daty '{data_string}': {e}")
+            return None
+
+    def switch_iframe(self, iframe_name):
+        try:
+            WebDriverWait(self.driver, 20).until(
+                EC.frame_to_be_available_and_switch_to_it((By.XPATH, f'//iframe[@name="{iframe_name}"]'))
+            )
+        except Exception as e:
+            print(f"Blad przy switch_iframe {e}")
+
+    def reset_frame(self):
+        self.driver.switch_to.default_content()
+        WebDriverWait(self.driver, 10).until(EC.element_to_be_clickable((By.XPATH, '//frame[@name="main"]')))
+        self.driver.switch_to.frame(self.driver.find_element(By.XPATH, '//frame[@name="main"]'))
+
+
+    def wait_for_element(self, locator,typeVal = "xpath", condition=EC.presence_of_element_located ,timeout=50, poll_frequency=0.5):
+        # param locator: Krotka zawierająca metodę wyszukiwania, np. (By.XPATH, "//div[@id='example']")
+        # param condition: Warunek z expected_conditions (domyślnie presence_of_element_located)
+        # param timeout: Maksymalny czas oczekiwania w sekundach (domyślnie 10)
+        # param poll_frequency: Częstotliwość sprawdzania warunku (domyślnie 0.5 sekundy)
+        # return: Znaleziony element WebElement lub wyjątek TimeoutException, jeśli warunek nie zostanie spełniony
+        ignored_exceptions = (NoSuchElementException, StaleElementReferenceException)
+        wait = WebDriverWait(self.driver, timeout, poll_frequency, ignored_exceptions=ignored_exceptions)
+        try:
+            match typeVal:
+                case "xpath":
+                    element = wait.until(condition((By.XPATH,locator)))
+                    return element
+                case "text":
+                    element = wait.until(condition((By.XPATH,f'//*[text()="{locator}"]')))
+                    return element
+                case "id":
+                    element = wait.until(condition((By.ID,locator)))
+                    return element
+                case "name":
+                    element = wait.until(condition((By.NAME,f'//*[@name="{locator}"]')))
+                    return element
+                case "tag":
+                    element = wait.until(condition((By.TAG_NAME,locator)))
+                    return element
+                case "css":
+                    element = wait.until(condition((By.CSS_SELECTOR,locator)))
+
+        except TimeoutException as e:
+            logging.error(f"Element {locator} nie pojawił się w ciągu {timeout} sekund.")
+            self.driver.save_screenshot("timeout_screenshot.png")
+            raise e
+        
+
+    # Funkcja do przejścia na PP po przez wyszukanie po PPE
+
+    def go_to_pp(self,value):
+        self.reset_frame()
+        self.switch_iframe("dashboard")
+        self.switch_iframe("zoneMapFrame_201")
+        pp_input = self.wait_for_element("charValueDisplay","id")
+        pp_input.send_keys(value)
+        find_pp_btn = self.wait_for_element("/html/body/table[2]/tbody/tr/td/input") 
+        find_pp_btn.click()
+
+    # Obsługa menu kontekstowego
+    # context_id - wybieramy indeks elementu, w którym chcemy rozwinąć menu kontekstowe np domek jest 3
+    # locator - element - jest to tekst, jest wyswietlamy na pasu menu i chcemy go wybrać
+    def handle_context_menu(self, context_id, locator = None,locator1=None,locator2=None):
+        self.reset_frame()
+        self.switch_iframe("dashboard")
+        drop_down_brn = self.wait_for_element(f'//*[@id="oraTableContextContainer"]/tbody/tr[{context_id}]/td[3]/img')
+        drop_down_brn.click()
+        time.sleep(1.3)
+        if locator is not None:
+            self.reset_frame()
+            menu_val1 = self.wait_for_element(locator,"text")
+            menu_val1.click()
+        time.sleep(1.3)
+        if locator1 is not None:
+            self.reset_frame()
+            menu_val2 = self.wait_for_element(locator1,"text")
+            menu_val2.click()
+
+
+
+    def handle_main_menu(self,lvl1,lvl2,lvl3):
+        self.reset_frame()
+        menu_drop_down = self.wait_for_element('//*[@id="IM_menuButton"]')
+        menu_drop_down.click()
+        time.sleep(1.3)
+        step1 = self.wait_for_element(lvl1,"text")
+        step1.click()
+        time.sleep(1.3)
+        step2 = self.wait_for_element(lvl2,"text")
+        step2.click()
+        time.sleep(1.3)
+        step3 = self.wait_for_element(lvl3,"text")
+        step3.click()
+
+    def switch_iframes(*iframes: str):
+        def decorator(original_function):
+            def wrapper(self, *args, **kwargs):
+                if not iframes:
+                    self.driver.reset_frame()
+                else:
+                    # logger.completed(f"current iframe: {self.driver.current_iframe}")
+                    # logger.completed(f"-1 iframe: {iframes[-1]}")
+                    # logger.completed(f"self.driver.current_iframe != iframes[-1]: {self.driver.current_iframe != iframes[-1]}\nself.driver.page_changed: {self.driver.page_changed}")
+                    if self.driver.current_iframe != iframes[-1] or self.driver.page_changed:
+                        self.driver.reset_frame()
+                        for iframe in iframes:
+                            self.driver.switch_iframe(iframe)
+                return original_function(self, *args, **kwargs)
+            return wrapper
+        return decorator
+    
+    # def acceptable_alerts(self, alert_to_accept:list = None):
+    #     accepted_alerts = []
+
+    #     if not alert_to_accept:
+    #         try:
+    #             alert = self.driver.switch_to.alert
+    #             if self.logg:
+    #                 self.logg.warning(f'Alert: {alert.text}')
+    #             alert.dismiss()
+    #             return True
+    #         except NoAlertPresentException:
+    #             return False
+    #     else:
+    #         try:
+    #             WebDriverWait(self.driver, 3).until(EC.alert_is_present())
+    #             alert = self.driver.switch_to.alert
+    #             if self.logg:
+    #                 self.logg.warning(f'Alert: {alert.text}')
+
+    #             for element in alert_to_accept:
+    #                 if element in alert.text:
+    #                     accepted_alerts.append(element)
+    #                     print(f'{element} - zaakceptowane')
+    #                     self.driver.switch_to.alert.accept()
+    #                     return True
+    #                 elif 'Kontynuacja procedury zapisywania spowoduje powielenie' in alert.text:
+    #                     print(f'{Color.RED}Kontynuacja procedury zapisywania spowoduje powielenie - anulowane{Color.OFF}')
+    #                     self.driver.switch_to.alert.dismiss()
+    #                     return True
+    #             else:
+    #                 print('Ostrzeżenie!')
+    #                 return False
+    #         except TimeoutException:
+    #             return False
+
+    def go_to_info_account(self,zipCode,City,ul,nr,m,uZipCode,uCity,uUl,uNr,uM,newPerson):
+        time.sleep(1)
+        # Reset ramki i przełącz na główną stronę
+        self.reset_frame()
+        self.switch_iframe("tabPage")
+        drop_down = self.wait_for_element('//*[@id="IM_CorInfo1_PERCNXT"]')
+        drop_down.click()
+        time.sleep(3)
+        self.reset_frame()
+            
+        # Przejście do konta i wyszukiwanie
+        print("idę do konta wyszukiwanie...")
+        go_to_acc = self.wait_for_element("Idź do konta", 'text')
+        go_to_acc.click()
+        time.sleep(2)
+        search_acc = self.wait_for_element("Wyszukiwanie", 'text')
+        search_acc.click()
+        time.sleep(3)
+        create = None
+    
+        main_window = self.driver.current_window_handle
+
+        if len(self.driver.window_handles) > 1:
+            print('Pojawiło się drugie okno!')
+            # switch_to nowe okno jak wyżej
+            create = False
+        else:
+            print('Brak drugiego okna')
+            create = True
+  
+
+        if(newPerson or create):          
+            print("jestem w momencie tworzenia/sprawdzenia  konta")
+
+            self.reset_frame()
+            self.switch_iframe("tabPage")
+
+            id_acc_valid = self.wait_for_element('//*[@id="ACCT_ID"]').get_attribute("value")
+            if(id_acc_valid == ""):
+                print("nie ma id konta")  
+                Obszar_obsługi_klientow = self.wait_for_element('//*[@id="CIS_DIVISION"]')
+                Obszar_obsługi_klientow.click()
+                time.sleep(.5)
+                pl = self.wait_for_element("Polska","text")
+                pl.click()
+                time.sleep(5)
+
+                try:
+                    alert = self.driver.switch_to.alert
+                    alert.accept() # or other interactions
+                except NoAlertPresentException:
+                    print("No alert present at this moment.")
+
+
+                cykl_rozliczeniowy = self.wait_for_element('//*[@id="BILL_CYC_CD"]')
+                cykl_rozliczeniowy.click()
+                time.sleep(.5)
+
+                jednomiesiczny = self.wait_for_element('Jednomiesięczny',"text")
+                jednomiesiczny.click()
+
+                self.reset_frame()
+                self.switch_iframe("tabMenu")
+                zakladka_osoby = self.wait_for_element('//*[@id="PERSONS_TLBL"]/table/tbody/tr[2]/td')
+                zakladka_osoby.click()
+
+                self.reset_frame()
+                self.switch_iframe("tabPage")
+
+                zrodlo_adresu = self.wait_for_element('//*[@id="ACCT_PER$BILL_ADDR_SRCE_FLG"]')
+                zrodlo_adresu.click()
+
+                if(str(uZipCode) != "nan" or str(uCity) != "nan" or str(uUl) != "nan" or str(uNr) != "nan" or str(uM) != "nan"):
+                    time.sleep(.5)
+                    nadpisanie_adresu_konta = self.wait_for_element("Nadpisanie adresu konta","text")
+                    nadpisanie_adresu_konta.click()
+
+                    time.sleep(2)
+                    if(str(uZipCode) != "nan"):
+                        kod_pocztowy  = self.wait_for_element('//*[@id="ACCT_PER$POSTAL"]')
+                        kod_pocztowy.send_keys(str(uZipCode).strip())
+                    if(str(uUl) != "nan"):
+                        ulica  = self.wait_for_element('//*[@id="ACCT_PER$ADDRESS2"]')
+                        ulica.send_keys(str(uUl).strip())
+                    if(str(uCity) != "nan"):
+                        miasto  = self.wait_for_element('//*[@id="ACCT_PER$CITY"]')
+                        miasto.send_keys(str(uCity).strip())
+                    if(str(uNr) != "nan"):
+                        nr  = self.wait_for_element('//*[@id="ACCT_PER$COUNTY"]')
+                        nr.send_keys(str(uNr).strip())
+                    if(str(uM) != "nan"):
+                        mieszkanie = self.wait_for_element('//*[@id="ACCT_PER$NUM1"]')
+                        mieszkanie.send_keys(str(uM).strip())
+
+                elif(str(uZipCode) == "nan" and str(uCity) == "nan" and str(uUl) == "nan" and str(uNr) == "nan" and str(uM) == "nan"):
+                    time.sleep(.5)
+                    osoba = self.wait_for_element("Osoba","text")
+                    osoba.click()
+
+                self.reset_frame()
+                zapisz = self.wait_for_element('//*[@id="IM_SAVE"]')
+                zapisz.click()
+
+                time.sleep(5)
+
+                self.reset_frame()
+                self.switch_iframe("tabPage")
+                
+                id_acc = self.wait_for_element('//*[@id="ACCT_ID"]').get_attribute("value")
+                return { "id_acc":str(id_acc), "caseToDo": True}
+            else:
+                time.sleep(5)
+                self.reset_frame()
+                self.switch_iframe("tabPage")
+                
+                id_acc = self.wait_for_element('//*[@id="ACCT_ID"]').get_attribute("value")
+                self.reset_frame()
+
+                return { "id_acc":str(id_acc), "caseToDo": True}
+        else:
+            main_window = self.driver.current_window_handle
+            time.sleep(2)
+            
+            # Przełącz na nowe okno
+            for handle in self.driver.window_handles:
+                if handle != main_window:
+                    self.driver.switch_to.window(handle)
+                    break
+            
+            # Przełącz do ramki dataframe w nowym oknie
+            self.switch_iframe("dataframe")
+            time.sleep(3)
+            
+            # Znajdź wszystkie elementy i zapisz ich teksty
+            elementy = self.driver.find_elements(By.XPATH, f'//*[@id="dataTableBody"]/tr/td[2]')
+            
+            # WAŻNE: Zbierz wszystkie teksty ZANIM wyjdziesz z iframe
+            teksty_elementow = [el.text for el in elementy]
+            
+            print("=== Znalazłem wszystkie osoby ===")
+            print(f"Liczba elementów: {len(teksty_elementow)}")
+            print(f"Teksty: {teksty_elementow}")
+            
+            # Wyjdź z iframe w nowym oknie
+            self.driver.switch_to.default_content()
+        
+            for tekst in teksty_elementow:  
+                id_acc = self.wait_for_element('//*[@id="ACCT_ID"]')
+                id_acc.clear()  # Wyczyść pole przed wpisaniem
+                id_acc.send_keys(tekst.strip())
+                sbtn = self.wait_for_element('//*[@id="BU_Main_search"]')
+                sbtn.click()
+                time.sleep(3)
+                self.driver.switch_to.window(main_window)
+                self.reset_frame()  
+                self.switch_iframe("tabPage")
+
+        
+
+                Klasa_klienta_val = False
+                Klasa_klienta  = self.wait_for_element('//*[@id="CUST_CL_CD"]')
+                if(str(Klasa_klienta.get_attribute("value")).strip()  == "DYSTBIZ"):
+                    Klasa_klienta_val = True
+
+                cykl_rozl_val = False
+                cykl_rozl = self.wait_for_element('//*[@id="BILL_CYC_CD"]')
+                if(str(cykl_rozl.get_attribute("value")).strip()  == "1MC"):
+                    cykl_rozl_val = True
+
+                print(f"==========================================================================================")
+                print(f"dla konta o id {tekst} Klasa_klienta = {Klasa_klienta.get_attribute("value")} czy jest zgodna {Klasa_klienta_val} cykl rozliczeniowy to {cykl_rozl.get_attribute("value")} czy jest zgodny {cykl_rozl_val}")
+                print(f"==========================================================================================")
+                
+
+                if(Klasa_klienta_val and cykl_rozl_val):
+                    self.reset_frame()
+                    self.switch_iframe("tabMenu")
+                    zakladka_osoby = self.wait_for_element('//*[@id="PERSONS_TLBL"]/table/tbody/tr[2]/td')
+                    zakladka_osoby.click()
+
+                    self.reset_frame()
+                    self.switch_iframe("tabPage")
+                    print(f"==========================================================================================")
+                    print(f"================================= Dla konta o id {tekst} =================================")
+                    print(f"==========================================================================================")
+                    
+                    zcode = self.wait_for_element('//*[@id="ACCT_PER$POSTAL"]').get_attribute("value")
+                    print("=== KONTO PORÓWNANIE KOD POCZTOWY ===")
+                    resultY = self.compare_names_similarity(zcode,zipCode)
+                    print(f"Podobieństwo: {resultY['similarity_percentage']}%")
+                    print(f"Różnice: {resultY['differences']}")
+
+                    city = self.wait_for_element('//*[@id="ACCT_PER$CITY"]').get_attribute("value")
+                    print("=== KONTO PORÓWNANIE MIASTA ===")
+                    resultx = self.compare_names_similarity(city,City)
+                    print(f"Podobieństwo: {resultx['similarity_percentage']}%")
+                    print(f"Różnice: {resultx['differences']}")
+
+                    street_data = self.wait_for_element('//*[@id="ACCT_PER$ADDRESS2"]').get_attribute("value")
+                    print("=== KONTO PORÓWNANIE ULICY ===")
+                    result2 = self.compare_names_similarity(street_data,ul)
+                    print(f"Podobieństwo: {result2['similarity_percentage']}%")
+                    print(f"Różnice: {result2['differences']}")
+
+                    home_number = self.wait_for_element('//*[@id="ACCT_PER$COUNTY"]').get_attribute("value")
+                    print("=== KONTO PORÓWNANIE NR DOMU/LOKALU ===")
+                    result3 = self.compare_names_similarity(home_number,nr)
+                    print(f"Podobieństwo: {result3['similarity_percentage']}%")
+                    print(f"Różnice: {result3['differences']}")
+
+                time.sleep(5)
+                self.reset_frame()
+                back_btn = self.wait_for_element('//*[@id="IM_GOBACK"]')
+                back_btn.click()
+                time.sleep(2)
+
+                if(Klasa_klienta_val and cykl_rozl_val and resultY['similarity_percentage'] == 100.0 and resultx['similarity_percentage'] == 100.0 and result2['similarity_percentage'] == 100.0 and result3['similarity_percentage'] == 100.0 ):
+                    time.sleep(5)
+                    return { "id_acc":str(tekst), "caseToDo": True}
+                # elif(str(uZipCode) == "nan" and str(uCity) == "nan" and str(uUl) == "nan" and str(uNr) == "nan" and str(uM) == "nan" and  self.wait_for_element('//*[@id="ACCT_PER$BILL_ADDR_SRCE_FLG"]').get_attribute('value') == "PER"):
+                #     print("Konto jest i trzeba poprać id - dane z osoby")
+                elif(Klasa_klienta_val and cykl_rozl_val and resultY['similarity_percentage'] != 100.0 and resultx['similarity_percentage'] != 100.0 and result2['similarity_percentage'] != 100.0 and result3['similarity_percentage'] != 100.0 and tekst == teksty_elementow[-1]):
+                    print('zakładam nowe konto - klasa klienta jest ok cykl jest ok ale daresy nie w ostatnim elemencie')
+                elif(Klasa_klienta_val and cykl_rozl_val == False and tekst == teksty_elementow[-1]):
+                    print('zakładam nowe konto - Klasa_klienta_val and cykl_rozl_val == False')
+                    time.sleep(5)
+                    self.reset_frame()
+                    self.switch_iframe("tabPage")
+                    drop_down = self.wait_for_element('//*[@id="IM_CorInfo1_PERCNXT"]')
+                    drop_down.click()
+                    time.sleep(3)
+                    self.reset_frame()
+                    go_to_acc = self.wait_for_element("Idź do konta", 'text')
+                    go_to_acc.click()
+                    time.sleep(2)
+                    search_acc_add = self.wait_for_element("Dodaj", 'text')
+                    search_acc_add.click()
+
+                    self.reset_frame()
+                    self.switch_iframe("tabPage")
+
+                    Obszar_obsługi_klientow = self.wait_for_element('//*[@id="CIS_DIVISION"]')
+                    Obszar_obsługi_klientow.click()
+                    time.sleep(.5)
+                    pl = self.wait_for_element("Polska","text")
+                    pl.click()
+                    time.sleep(5)
+
+                    try:
+                        alert = self.driver.switch_to.alert
+                        alert.accept() # or other interactions
+                    except NoAlertPresentException:
+                        print("No alert present at this moment.")
+
+
+                    cykl_rozliczeniowy = self.wait_for_element('//*[@id="BILL_CYC_CD"]')
+                    cykl_rozliczeniowy.click()
+                    time.sleep(.5)
+
+                    jednomiesiczny = self.wait_for_element('Jednomiesięczny',"text")
+                    jednomiesiczny.click()
+
+                    self.reset_frame()
+                    self.switch_iframe("tabMenu")
+                    zakladka_osoby = self.wait_for_element('//*[@id="PERSONS_TLBL"]/table/tbody/tr[2]/td')
+                    zakladka_osoby.click()
+
+                    self.reset_frame()
+                    self.switch_iframe("tabPage")
+
+                    zrodlo_adresu = self.wait_for_element('//*[@id="ACCT_PER$BILL_ADDR_SRCE_FLG"]')
+                    zrodlo_adresu.click()
+
+                    if(str(uZipCode) != "nan" or str(uCity) != "nan" or str(uUl) != "nan" or str(uNr) != "nan" or str(uM) != "nan"):
+                        time.sleep(.5)
+                        nadpisanie_adresu_konta = self.wait_for_element("Nadpisanie adresu konta","text")
+                        nadpisanie_adresu_konta.click()
+
+                        time.sleep(2)
+                        if(str(uZipCode) != "nan"):
+                            kod_pocztowy  = self.wait_for_element('//*[@id="ACCT_PER$POSTAL"]')
+                            kod_pocztowy.send_keys(str(uZipCode).strip())
+                        if(str(uUl) != "nan"):
+                            ulica  = self.wait_for_element('//*[@id="ACCT_PER$ADDRESS2"]')
+                            ulica.send_keys(str(uUl).strip())
+                        if(str(uCity) != "nan"):
+                            miasto  = self.wait_for_element('//*[@id="ACCT_PER$CITY"]')
+                            miasto.send_keys(str(uCity).strip())
+                        if(str(uNr) != "nan"):
+                            nr  = self.wait_for_element('//*[@id="ACCT_PER$COUNTY"]')
+                            nr.send_keys(str(uNr).strip())
+                        if(str(uM) != "nan"):
+                            mieszkanie = self.wait_for_element('//*[@id="ACCT_PER$NUM1"]')
+                            mieszkanie.send_keys(str(uM).strip())
+
+                    elif(str(uZipCode) == "nan" and str(uCity) == "nan" and str(uUl) == "nan" and str(uNr) == "nan" and str(uM) == "nan"):
+                        time.sleep(.5)
+                        osoba = self.wait_for_element("Osoba","text")
+                        osoba.click()
+
+                    self.reset_frame()
+                    zapisz = self.wait_for_element('//*[@id="IM_SAVE"]')
+                    zapisz.click()
+                    time.sleep(5)
+                    self.reset_frame()
+                    self.switch_iframe("tabPage")
+                    id_acc = self.wait_for_element('//*[@id="ACCT_ID"]').get_attribute("value")
+                    return { "id_acc":str(id_acc), "caseToDo": True}
+                
+                elif(Klasa_klienta_val == False and tekst == teksty_elementow[-1]):
+                    print('zakładam nowe konto Klasa_klienta_val == False')
+                    time.sleep(5)
+                    self.reset_frame()
+                    self.switch_iframe("tabPage")
+                    drop_down = self.wait_for_element('//*[@id="IM_CorInfo1_PERCNXT"]')
+                    drop_down.click()
+                    time.sleep(3)
+                    self.reset_frame()
+                    go_to_acc = self.wait_for_element("Idź do konta", 'text')
+                    go_to_acc.click()
+                    time.sleep(2)
+                    search_acc_add = self.wait_for_element("Dodaj", 'text')
+                    search_acc_add.click()
+
+                    self.reset_frame()
+                    self.switch_iframe("tabPage")
+
+                    Obszar_obsługi_klientow = self.wait_for_element('//*[@id="CIS_DIVISION"]')
+                    Obszar_obsługi_klientow.click()
+                    time.sleep(.5)
+                    pl = self.wait_for_element("Polska","text")
+                    pl.click()
+                    time.sleep(5)
+
+                    try:
+                        alert = self.driver.switch_to.alert
+                        alert.accept() # or other interactions
+                    except NoAlertPresentException:
+                        print("No alert present at this moment.")
+
+
+                    cykl_rozliczeniowy = self.wait_for_element('//*[@id="BILL_CYC_CD"]')
+                    cykl_rozliczeniowy.click()
+                    time.sleep(.5)
+
+                    jednomiesiczny = self.wait_for_element('Jednomiesięczny',"text")
+                    jednomiesiczny.click()
+
+                    self.reset_frame()
+                    self.switch_iframe("tabMenu")
+                    zakladka_osoby = self.wait_for_element('//*[@id="PERSONS_TLBL"]/table/tbody/tr[2]/td')
+                    zakladka_osoby.click()
+
+                    self.reset_frame()
+                    self.switch_iframe("tabPage")
+
+                    zrodlo_adresu = self.wait_for_element('//*[@id="ACCT_PER$BILL_ADDR_SRCE_FLG"]')
+                    zrodlo_adresu.click()
+
+                    if(str(uZipCode) != "nan" or str(uCity) != "nan" or str(uUl) != "nan" or str(uNr) != "nan" or str(uM) != "nan"):
+                        time.sleep(.5)
+                        nadpisanie_adresu_konta = self.wait_for_element("Nadpisanie adresu konta","text")
+                        nadpisanie_adresu_konta.click()
+
+                        time.sleep(2)
+                        if(str(uZipCode) != "nan"):
+                            kod_pocztowy  = self.wait_for_element('//*[@id="ACCT_PER$POSTAL"]')
+                            kod_pocztowy.send_keys(str(uZipCode).strip())
+                        if(str(uUl) != "nan"):
+                            ulica  = self.wait_for_element('//*[@id="ACCT_PER$ADDRESS2"]')
+                            ulica.send_keys(str(uUl).strip())
+                        if(str(uCity) != "nan"):
+                            miasto  = self.wait_for_element('//*[@id="ACCT_PER$CITY"]')
+                            miasto.send_keys(str(uCity).strip())
+                        if(str(uNr) != "nan"):
+                            nr  = self.wait_for_element('//*[@id="ACCT_PER$COUNTY"]')
+                            nr.send_keys(str(uNr).strip())
+                        if(str(uM) != "nan"):
+                            mieszkanie = self.wait_for_element('//*[@id="ACCT_PER$NUM1"]')
+                            mieszkanie.send_keys(str(uM).strip())
+
+                    elif(str(uZipCode) == "nan" and str(uCity) == "nan" and str(uUl) == "nan" and str(uNr) == "nan" and str(uM) == "nan"):
+                        time.sleep(.5)
+                        osoba = self.wait_for_element("Osoba","text")
+                        osoba.click()
+
+                    self.reset_frame()
+                    zapisz = self.wait_for_element('//*[@id="IM_SAVE"]')
+                    zapisz.click()
+                    time.sleep(5)
+                    self.reset_frame()
+                    self.switch_iframe("tabPage")
+                    id_acc = self.wait_for_element('//*[@id="ACCT_ID"]').get_attribute("value")
+                    return { "id_acc":str(id_acc), "caseToDo": True}
+
+
+                # Działania w głównym oknie 
+                self.reset_frame()
+                self.switch_iframe("tabPage")
+                drop_down = self.wait_for_element('//*[@id="IM_CorInfo1_PERCNXT"]')
+                drop_down.click()
+                time.sleep(3)
+                self.reset_frame()
+                
+                go_to_acc = self.wait_for_element("Idź do konta", 'text')
+                go_to_acc.click()
+                time.sleep(2)
+                search_acc = self.wait_for_element("Wyszukiwanie", 'text')
+                search_acc.click()
+
+                time.sleep(4)
+                for handle in self.driver.window_handles:
+                    if handle != main_window:
+                        self.driver.switch_to.window(handle)
+                        break
+
+  
+    def go_to_infoClient_find(self,nip,person2,zipCode,City,ul,nr,m):
+
+        self.handle_main_menu("Informacje o kliencie","Osoba","Wyszukiwanie")
+       
+        main_page = self.driver.current_window_handle
+        time.sleep(5)
+      
+        for handle in self.driver.window_handles:
+            self.driver.switch_to.window(handle)
+
+        time.sleep(2)
+        select_typ_id = self.wait_for_element('//*[@id="ID_TYPE_CD"]')
+        select_typ_id.click()
+        time.sleep(2)
+        NIP = self.wait_for_element("NIP","text")
+
+        NIP.click()
+        time.sleep(2)
+        id_osoby = self.wait_for_element('//*[@id="PER_ID_NBR"]')
+        id_osoby.click()
+        id_osoby.send_keys(str(nip))
+    
+        wyszukanie = self.wait_for_element('//*[@id="BU_Alternate2_search"]')
+        wyszukanie.click()
+
+        uss_list = []
+        try:
+            time.sleep(5)
+            self.switch_iframe('dataframe')
+            x: str = "//*[contains(@id, 'SEARCH_RESULTS:') and contains(@id, '$PER_ID') and not(contains(@id, '_NBR'))]"
+            wszystkie_elementy = self.driver.find_elements(By.XPATH, x)
+            for element in wszystkie_elementy:
+                print(element.text)
+                uss_list.append(element.text)
+
+        except:
+            print("brak listy")
+
+        if len(uss_list) > 0:
+            for index, item in enumerate(uss_list): 
+                print('szukam .... dla id', item)
+             
+                is_last_item = (index == len(uss_list) - 1)
+                
+                for handle2 in self.driver.window_handles:
+                    self.driver.switch_to.window(handle2)
+                id_user_input = self.wait_for_element('//*[@id="PER_ID"]')
+                id_user_input.click()
+                id_user_input.send_keys(item)
+                time.sleep(3)
+                szukaj_osoby = self.wait_for_element('//*[@id="BU_Main_search"]')
+                szukaj_osoby.click()
+                
+                time.sleep(5)
+                self.driver.switch_to.window(main_page)
+                time.sleep(3)
+                self.reset_frame()
+                self.switch_iframe("tabPage")
+                self.switch_iframe("PER_NAME")
+                glowna = self.driver.find_element(By.CSS_SELECTOR, 'td[aria-label="Główna"]')
+                sibling_td = glowna.find_element(By.XPATH, './following-sibling::td') 
+                person1 = sibling_td.find_element(By.TAG_NAME, 'input') 
+                time.sleep(3)
+
+                print("weryfikacja osoby",person1.get_attribute("value"))
+                print("=== OSOBA PORÓWNANIE OSOBY ===")
+                result = self.compare_names_similarity(str(person1.get_attribute("value")),person2)
+                print(f"Podobieństwo: {result['similarity_percentage']}%")
+                print(f"Różnice: {result['differences']}")
+
+                self.reset_frame()
+                self.switch_iframe("tabMenu")
+                informacje_adresowe = self.wait_for_element('//*[@id="CORINFO_TLBL"]/table/tbody/tr[2]/td')
+                informacje_adresowe.click()
+
+                self.reset_frame()
+                self.switch_iframe("tabPage")
+
+                
+                zcode = self.wait_for_element('//*[@id="POSTAL"]').get_attribute("value")
+                print("=== OSOBA PORÓWNANIE KOD POCZTOWY ===")
+                resultY = self.compare_names_similarity(zcode,zipCode)
+                print(f"Podobieństwo: {resultY['similarity_percentage']}%")
+                print(f"Różnice: {resultY['differences']}")
+
+                city = self.wait_for_element('//*[@id="CITY"]').get_attribute("value")
+                print("=== OSOBA PORÓWNANIE MIASTA ===")
+                resultx = self.compare_names_similarity(city,City)
+                print(f"Podobieństwo: {resultx['similarity_percentage']}%")
+                print(f"Różnice: {resultx['differences']}")
+
+                
+                street_data = self.wait_for_element('//*[@id="ADDRESS2"]').get_attribute("value")
+                print("=== OSOBA PORÓWNANIE ULICY ===")
+                result2 = self.compare_names_similarity(street_data,ul)
+                print(f"Podobieństwo: {result2['similarity_percentage']}%")
+                print(f"Różnice: {result2['differences']}")
+
+                home_number = self.wait_for_element('//*[@id="COUNTY"]').get_attribute("value")
+                print("=== OSOBA PORÓWNANIE NR DOMU/LOKALU ===")
+                result3 = self.compare_names_similarity(home_number,nr)
+                print(f"Podobieństwo: {result3['similarity_percentage']}%")
+                print(f"Różnice: {result3['differences']}")
+
+                results = [resultY, resultx, result2, result3]
+                all_100 = all(r['similarity_percentage'] == 100.0 for r in results)
+                any_below_90 = any(r['similarity_percentage'] < 90.0 for r in results)
+                
+                print(f"Jest ostatni element: {is_last_item}")
+                print(f"Jakikolw:iek wynik < 90 {any_below_90}")
+                print(f"Wszystkie wyniki == 100 {all_100}")
+
+                # Przypadek 1: Wszystkie wyniki = 100%
+                if all_100:
+                    print("Wszystkie wyniki = 100 dla id: ",item)
+                    id_osoby = self.wait_for_element('//*[@id="PER_ID"]').get_attribute("value")
+                    return {"id_osoba": id_osoby, "validAcc": True}
+
+                # Przypadek 2: Ostatni element i jakikolwiek wynik < 90%
+                elif is_last_item and any_below_90:
+                    print("Ostatni element listy - brak poprawnych danych, tworzę nową osobę")
+                    self.handle_main_menu("Informacje o kliencie", "Osoba", "Dodaj")
+                    self.reset_frame()
+                    self.switch_iframe("tabPage")
+                    osoba_indywidualna_firma = self.wait_for_element('//*[@id="PER_OR_BUS_FLG"]')
+                    osoba_indywidualna_firma.click()
+                    time.sleep(.5)
+                    firma = self.wait_for_element("Firma", "text")
+                    firma.click()
+                    self.reset_frame()
+                    self.switch_iframe("tabPage")
+                    self.switch_iframe('PER_NAME')
+                    glowna2 = self.driver.find_element(By.CSS_SELECTOR, 'td[aria-label="Główna"]')
+                    sibling_td2 = glowna2.find_element(By.XPATH, './following-sibling::td') 
+                    person = sibling_td2.find_element(By.TAG_NAME, 'input')
+                    person.send_keys(str(person2), Keys.RETURN)
+
+                    time.sleep(1)
+                    self.reset_frame()
+                    self.switch_iframe("tabPage")
+                    self.switch_iframe('PER_IDENTIFIER')
+                    
+                    nip2 = self.wait_for_element('//*[@id="PER_IDENTIFIER:0$PER_ID_NBR"]')
+                    nip2.send_keys(str(nip), Keys.RETURN)
+
+                    self.reset_frame()
+                    self.switch_iframe("tabMenu")
+                    informacje_aresowe = self.wait_for_element('//*[@id="CORINFO_TLBL"]')
+                    informacje_aresowe.click()
+
+                    self.reset_frame()
+                    self.switch_iframe("tabPage")
+                    
+                    print("kod pocztowy ---", zipCode)
+                    if str(zipCode) != "nan":
+                        kod_pocztowy = self.wait_for_element('//*[@id="POSTAL"]')
+                        kod_pocztowy.send_keys(str(zipCode).strip(), Keys.RETURN)
+                    
+                    print("Ulica-", ul)
+                    if str(ul) != "nan":
+                        ulica = self.wait_for_element('//*[@id="ADDRESS2"]')
+                        ulica.send_keys(ul, Keys.RETURN)
+                    
+                    print("Miasto-", City)    
+                    if str(City) != "nan":
+                        miasto = self.wait_for_element('//*[@id="CITY"]')
+                        miasto.send_keys(City, Keys.RETURN)
+                    
+                    print("Budynek-", nr)  
+                    if str(nr) != "nan":
+                        house = self.wait_for_element('//*[@id="COUNTY"]')
+                        house.send_keys(str(nr).strip(), Keys.RETURN)
+                    
+                    print("Mieszkanie-", m)  
+                    if str(m) != "nan":
+                        mieszkanie = self.wait_for_element('//*[@id="NUM1"]')
+                        mieszkanie.send_keys(str(m).strip(), Keys.RETURN)
+
+                    self.reset_frame()
+                    zapisz = self.wait_for_element('//*[@id="IM_SAVE"]')
+                    zapisz.click()
+
+                    try:
+                        alert = self.driver.switch_to.alert
+                        alert.accept()
+                    except NoAlertPresentException:
+                        print("No alert present at this moment.")
+
+                    time.sleep(2)
+
+                    self.reset_frame()
+                    back_btn = self.wait_for_element('//*[@id="IM_GOBACK"]')
+                    back_btn.click()
+
+                    self.reset_frame()
+                    self.switch_iframe("tabPage")
+                    id_osoby = self.wait_for_element('//*[@id="PER_ID"]').get_attribute("value")
+                
+                    return {"id_osoba": id_osoby, "validAcc": False}
+                
+              
+                else:
+                    print(f"Element {index + 1}/{len(uss_list)} - nie pasuje, sprawdzam następny...")
+                    self.handle_main_menu("Informacje o kliencie","Osoba","Wyszukiwanie")
+                    time.sleep(10)
+        else:
+            time.sleep(2)
+            self.driver.switch_to.window(main_page)
+
+      
+            # id_osoby_alone = self.wait_for_element('//*[@id="PER_ID"]').get_attribute("value")
+            # print("id osoby pojedyńczej",id_osoby_alone)
+
+            self.reset_frame()
+            self.switch_iframe("tabPage")
+            self.switch_iframe('PER_NAME')
+            glowna0 = self.driver.find_element(By.CSS_SELECTOR, 'td[aria-label="Główna"]')
+            sibling_td0 = glowna0.find_element(By.XPATH, './following-sibling::td') 
+            person_2 = sibling_td0.find_element(By.TAG_NAME,'input').get_attribute('value')
+        
+            if(person_2 != "" ):
+                print('jest osoba pojedyńcza weryfikuje')
+                self.reset_frame()
+                self.switch_iframe("tabMenu")
+                informacje_adresowe = self.wait_for_element('//*[@id="CORINFO_TLBL"]/table/tbody/tr[2]/td')
+                informacje_adresowe.click()
+
+                self.reset_frame()
+                self.switch_iframe("tabPage")
+
+                zcode = self.wait_for_element('//*[@id="POSTAL"]').get_attribute("value")
+                print("=== OSOBA PORÓWNANIE KOD POCZTOWY ===")
+                resultY = self.compare_names_similarity(zcode,zipCode)
+                print(f"Podobieństwo: {resultY['similarity_percentage']}%")
+                print(f"Różnice: {resultY['differences']}")
+
+                city = self.wait_for_element('//*[@id="CITY"]').get_attribute("value")
+                print("=== OSOBA PORÓWNANIE MIASTA ===")
+                resultx = self.compare_names_similarity(city,City)
+                print(f"Podobieństwo: {resultx['similarity_percentage']}%")
+                print(f"Różnice: {resultx['differences']}")
+
+                street_data = self.wait_for_element('//*[@id="ADDRESS2"]').get_attribute("value")
+                print("=== OSOBA PORÓWNANIE ULICY ===")
+                result2 = self.compare_names_similarity(street_data,ul)
+                print(f"Podobieństwo: {result2['similarity_percentage']}%")
+                print(f"Różnice: {result2['differences']}")
+
+                home_number = self.wait_for_element('//*[@id="COUNTY"]').get_attribute("value")
+                print("=== OSOBA PORÓWNANIE NR DOMU/LOKALU ===")
+                result3 = self.compare_names_similarity(home_number,nr)
+                print(f"Podobieństwo: {result3['similarity_percentage']}%")
+                print(f"Różnice: {result3['differences']}")
+
+                results = [resultY, resultx, result2, result3]
+                all_100 = all(r['similarity_percentage'] == 100.0 for r in results)
+                any_below_90 = any(r['similarity_percentage'] < 90.0 for r in results)
+                
+             
+                print(f"Jakikolw:iek wynik < 90 {any_below_90}")
+                print(f"Wszystkie wyniki == 100 {all_100}")
+
+                # Przypadek 1: Wszystkie wyniki = 100%
+                if all_100:
+                    print("Wszystkie wyniki = 100")
+                    id_osoby = self.wait_for_element('//*[@id="PER_ID"]').get_attribute("value")
+                    print(f"jest 100 i id to: {id_osoby}")
+                    return {"id_osoba": id_osoby, "validAcc": True}
+
+                # Przypadek 2: Ostatni element i jakikolwiek wynik < 90%
+                elif any_below_90:
+                    print("Ostatni element listy - brak poprawnych danych, tworzę nową osobę")
+                    self.handle_main_menu("Informacje o kliencie", "Osoba", "Dodaj")
+                    self.reset_frame()
+                    self.switch_iframe("tabPage")
+                    osoba_indywidualna_firma = self.wait_for_element('//*[@id="PER_OR_BUS_FLG"]')
+                    osoba_indywidualna_firma.click()
+                    time.sleep(.5)
+                    firma = self.wait_for_element("Firma", "text")
+                    firma.click()
+                    self.reset_frame()
+                    self.switch_iframe("tabPage")
+                    self.switch_iframe('PER_NAME')
+                    glowna2 = self.driver.find_element(By.CSS_SELECTOR, 'td[aria-label="Główna"]')
+                    sibling_td2 = glowna2.find_element(By.XPATH, './following-sibling::td') 
+                    person = sibling_td2.find_element(By.TAG_NAME, 'input')
+                    person.send_keys(str(person2), Keys.RETURN)
+
+                    time.sleep(1)
+                    self.reset_frame()
+                    self.switch_iframe("tabPage")
+                    self.switch_iframe('PER_IDENTIFIER')
+                    
+                    nip2 = self.wait_for_element('//*[@id="PER_IDENTIFIER:0$PER_ID_NBR"]')
+                    nip2.send_keys(str(nip), Keys.RETURN)
+
+                    self.reset_frame()
+                    self.switch_iframe("tabMenu")
+                    informacje_aresowe = self.wait_for_element('//*[@id="CORINFO_TLBL"]')
+                    informacje_aresowe.click()
+
+                    self.reset_frame()
+                    self.switch_iframe("tabPage")
+                    
+                    print("kod pocztowy ---", zipCode)
+                    if str(zipCode) != "nan":
+                        kod_pocztowy = self.wait_for_element('//*[@id="POSTAL"]')
+                        kod_pocztowy.send_keys(str(zipCode).strip(), Keys.RETURN)
+                    
+                    print("Ulica-", ul)
+                    if str(ul) != "nan":
+                        ulica = self.wait_for_element('//*[@id="ADDRESS2"]')
+                        ulica.send_keys(ul, Keys.RETURN)
+                    
+                    print("Miasto-", City)    
+                    if str(City) != "nan":
+                        miasto = self.wait_for_element('//*[@id="CITY"]')
+                        miasto.send_keys(City, Keys.RETURN)
+                    
+                    print("Budynek-", nr)  
+                    if str(nr) != "nan":
+                        house = self.wait_for_element('//*[@id="COUNTY"]')
+                        house.send_keys(str(nr).strip(), Keys.RETURN)
+                    
+                    print("Mieszkanie-", m)  
+                    if str(m) != "nan":
+                        mieszkanie = self.wait_for_element('//*[@id="NUM1"]')
+                        mieszkanie.send_keys(str(m).strip(), Keys.RETURN)
+
+                    self.reset_frame()
+                    zapisz = self.wait_for_element('//*[@id="IM_SAVE"]')
+                    zapisz.click()
+
+                    try:
+                        alert = self.driver.switch_to.alert
+                        alert.accept()
+                    except NoAlertPresentException:
+                        print("No alert present at this moment.")
+
+                    time.sleep(2)
+
+                    self.reset_frame()
+                    back_btn = self.wait_for_element('//*[@id="IM_GOBACK"]')
+                    back_btn.click()
+
+                    self.reset_frame()
+                    self.switch_iframe("tabPage")
+                    id_osoby = self.wait_for_element('//*[@id="PER_ID"]').get_attribute("value")
+                
+                    return {"id_osoba": id_osoby, "validAcc": False}
+            else:
+                self.reset_frame()
+                self.switch_iframe("tabPage")
+                print("brak listy z osobami nie ma pojedyńczej osoby zakładam nową osobę")
+                osoba_indywidualna_firma = self.wait_for_element('//*[@id="PER_OR_BUS_FLG"]')
+                osoba_indywidualna_firma.click()
+                time.sleep(.5)
+                firma = self.wait_for_element("Firma","text")
+                firma.click()
+                self.reset_frame()
+                self.switch_iframe("tabPage")
+                self.switch_iframe('PER_NAME')
+                glowna2 = self.driver.find_element(By.CSS_SELECTOR, 'td[aria-label="Główna"]')
+                sibling_td2 = glowna2.find_element(By.XPATH, './following-sibling::td') 
+                person = sibling_td2.find_element(By.TAG_NAME,'input')
+                print("person2", person2)
+                person.send_keys(str(person2),Keys.RETURN)
+
+                time.sleep(1)
+                self.reset_frame()
+                self.switch_iframe("tabPage")
+                self.switch_iframe('PER_IDENTIFIER')
+                
+                nip2 = self.wait_for_element('//*[@id="PER_IDENTIFIER:0$PER_ID_NBR"]')
+
+                nip2.send_keys(str(nip),Keys.RETURN)
+
+                self.reset_frame()
+                self.switch_iframe("tabMenu")
+                informacje_aresowe = self.wait_for_element('//*[@id="CORINFO_TLBL"]')
+                informacje_aresowe.click()
+
+                self.reset_frame()
+                self.switch_iframe("tabPage")
+                print("kod pocztowy ---", zipCode)
+                if(str(zipCode) != "nan"):
+                    kod_pocztowy  = self.wait_for_element('//*[@id="POSTAL"]')
+                    kod_pocztowy.send_keys(str(zipCode).strip(),Keys.RETURN)
+                print("Ulica-", ul)
+                if(str(ul) != "nan"):
+                    ulica = self.wait_for_element('//*[@id="ADDRESS2"]')
+                    ulica.send_keys(ul,Keys.RETURN)
+                print("Miasto-", City)    
+                if(str(City) != "nan"):
+                    miasto  = self.wait_for_element('//*[@id="CITY"]')
+                    miasto.send_keys(City,Keys.RETURN)
+                print("Budynek-", nr)  
+                if(str(nr) != "nan"):
+                    house  = self.wait_for_element('//*[@id="COUNTY"]')
+                    house.send_keys(str(nr).strip(),Keys.RETURN)
+                print("Mieszkanie-", m)  
+                if(str(m) != "nan"):
+                    mieszkanie = self.wait_for_element('//*[@id="NUM1"]')
+                    mieszkanie.send_keys(str(m).strip(),Keys.RETURN)
+
+                
+                self.reset_frame()
+
+                zapisz = self.wait_for_element('//*[@id="IM_SAVE"]')
+                zapisz.click()
+
+                
+                try:
+                    alert = self.driver.switch_to.alert
+                    alert.accept() # or other interactions
+                except NoAlertPresentException:
+                    print("No alert present at this moment.")
+
+                time.sleep(2)
+
+                self.reset_frame()
+                back_btn = self.wait_for_element('//*[@id="IM_GOBACK"]')
+                back_btn.click()
+
+                self.reset_frame()
+                self.switch_iframe("tabPage")
+                id_osoby = self.wait_for_element('//*[@id="PER_ID"]').get_attribute("value")
+
+                return { "id_osoba":id_osoby, "validAcc": False}
+
+             
+    def extract_table_data(self, tbody_locator: str, timeout: int = 30) -> list[dict] | None:
+        try:
+            time.sleep(5)
+            tbody = self.wait_for_element(tbody_locator, typeVal="xpath", timeout=timeout)
+            
+            # Opcjonalnie ustaw zoom
+            self.set_browser_zoom(0.65)
+            
+            # NAGŁÓWKI - z scrollowaniem
+            headers = self.driver.find_elements(By.XPATH, "//thead/tr/th | //thead/tr/td")
+            header_arr = []
+            
+            for cell in headers:
+                try:
+                    # Scrolluj do nagłówka (ważne przy poziomym scrollu!)
+                    self.driver.execute_script("arguments[0].scrollIntoView({block: 'nearest', inline: 'center'});", cell)
+                    
+                    # Twoja oryginalna logika pobierania tekstu
+                    try:
+                        span = cell.find_element(By.XPATH, ".//span")
+                        text = span.text.strip()
+                    except Exception:
+                        text = cell.text.strip()
+                        
+                    if text:  # Zachowujesz tylko niepuste nagłówki
+                        header_arr.append(text)
+                        
+                except Exception as e:
+                    logging.warning(f"Błąd przy pobieraniu nagłówka: {e}")
+                    continue
+            
+            logging.info(f"Pobrano {len(header_arr)} nagłówków: {header_arr}")
+            
+            # WIERSZE - z scrollowaniem
+            rows = tbody.find_elements(By.CSS_SELECTOR, "#dataExplorerTableBody1 > tr")
+            
+            if not rows:
+                logging.warning("Nie znaleziono żadnych wierszy <tr> w tbody.")
+                return []
+            
+            data = []
+            
+            for row_idx, row in enumerate(rows):
+                try:
+                    # Scrolluj do wiersza
+                    
+                    self.driver.execute_script("arguments[0].scrollIntoView({block: 'center', inline: 'nearest'});", row)
+                    
+                    cells = row.find_elements(By.TAG_NAME, "td")
+                    values = []
+                    
+                    for cell in cells:
+                        try:
+                            # Scrolluj do komórki (przy szerokich tabelach)
+                        
+                            self.driver.execute_script("arguments[0].scrollIntoView({block: 'nearest', inline: 'center'});", cell)
+                            
+                            # Twoja oryginalna logika pobierania tekstu
+                            try:
+                                span = cell.find_element(By.XPATH, ".//span")
+                                text = span.text.strip()
+                            except Exception:
+                                text = cell.text.strip()
+                            
+                            # WAŻNE: zachowujesz swoją logikę filtrowania!
+                            if text != "" and len(text) > 1:
+                                values.append(text)
+                                
+                        except Exception as e:
+                            # Pomijamy błędne komórki
+                            continue
+                    
+                    # Łączysz nagłówki z wartościami - tak jak w oryginale
+                    row_dict = dict(zip(header_arr, values))
+                    data.append(row_dict)
+                    
+                except Exception as e:
+                    logging.error(f"Błąd przy przetwarzaniu wiersza #{row_idx}: {e}")
+                    continue
+            
+            logging.info(f"Pobrano {len(data)} wierszy z tabeli.")
+            # print("moja data to", data)
+            return data
+            
+        except Exception as e:
+            logging.error(f"Błąd podczas pobierania danych z tabeli: {e}")
+            return None
+
+    def extract_oracle_grid_tab(self) -> list[dict] | None:
+        try:
+            #pobierz nagłówki z headerTable ----- uwaga ---- id może się róznić --- trzeba przd metodą przeładować iframe
+            header_tbl = self.driver.find_element(By.ID, "headerTable")
+            h_cells = header_tbl.find_elements(By.XPATH, ".//th|.//td")
+           
+            raw_headers = []
+            for h in h_cells:
+                txt = h.text.strip() or h.get_attribute("textContent").strip()
+                raw_headers.append(txt)
+
+            # pomijam pierwsze puste kolumny („+”,„–”)
+            header_arr = [h for h in raw_headers if h]
+
+            #pobierz wiersze danych
+            tbody = self.driver.find_element(By.ID, "dataTableBody")
+            rows = tbody.find_elements(By.XPATH, ".//tr")
+            data = []
+
+            for r in rows:
+                cells = r.find_elements(By.TAG_NAME, "td")
+                # pomiń pierwsze 2 kolumny plus/minus
+                logic_cells = cells[2:] if len(cells) > 2 else cells
+                row_values = []
+
+                for c in logic_cells:
+                    val = ""
+
+                    # checkbox
+                    if c.find_elements(By.XPATH, ".//input[@type='checkbox']"):
+                        chk = c.find_element(By.XPATH, ".//input[@type='checkbox']")
+                        val = "X" if chk.is_selected() or chk.get_attribute("checked") else ""
+
+                    # select (tylko wybrana opcja ✔)
+                    elif c.find_elements(By.XPATH, ".//select"):
+                        sel_el = c.find_element(By.TAG_NAME, "select")
+                        try:
+                            sel = Select(sel_el)
+                            selected_opt = sel.first_selected_option
+                            val = (
+                                selected_opt.text.strip()
+                                or selected_opt.get_attribute("value")
+                                or ""
+                            )
+                        except Exception:
+                            # awaryjny fallback
+                            val = sel_el.get_attribute("value") or ""
+
+                    # input text
+                    elif c.find_elements(By.XPATH, ".//input[@type='text']"):
+                        inp = c.find_element(By.XPATH, ".//input[@type='text']")
+                        val = inp.get_attribute("value") or ""
+
+                    # span
+                    elif c.find_elements(By.XPATH, ".//span"):
+                        sp = c.find_element(By.XPATH, ".//span")
+                        val = sp.text.strip() or sp.get_attribute("textContent").strip()
+
+                    # zwykły tekst międzytagowy
+                    else:
+                        txt = c.text.strip()
+                        if txt:
+                            val = txt
+
+                    row_values.append(val)
+
+                # dopasuj długość / nagłówków
+                if len(row_values) < len(header_arr):
+                    row_values += [""] * (len(header_arr) - len(row_values))
+                elif len(row_values) > len(header_arr):
+                    row_values = row_values[:len(header_arr)]
+
+                data.append(dict(zip(header_arr, row_values)))
+
+            logging.info(f"Pobrano {len(data)} wierszy z Oracle gridu.")
+            return data
+        except Exception as e:
+            logging.error(f"Błąd podczas parsowania Oracle gridu: {e}")
+            return None
+        
+
+    def get_case_status(self, person_excel="xxxxxx", nip_excel="xxxxx08"):
+        self.reset_frame()
+        self.switch_iframe("tabPage")
+        table = '/html/body/div[1]/div/table/tbody/tr[8]/td/div[1]/table'
+        table_data = self.extract_table_data(table, timeout=30)
+
+        rezult = []
+
+        if table_data:
+            # Sprawdzenie czy są jakiekolwiek sprawy tego typu
+            typeCaseCounter = sum(1 for data0 in table_data 
+                if data0.get("TYP SPRAWY") == "Zawarcie umowy dystrybucyjnej z wniosku")
+
+            if typeCaseCounter == 0:
+                rezult.append({"toDo": True, "mesage": "Brak sprawy - Zawarcie umowy dystrybucyjnej z wniosku"})
+
+            # Statusy które tylko dodają wpis bez dodatkowej logiki
+            STATUSY_PROSTE = {
+                "Dodanie relacji do umowy": {"toDo": False},
+                "Rejestracja danych z wniosku": {"toDo": False},
+                "Oczekiwanie na aktywację umowy": {"toDo": False, "print_only": True},
+                "Oczekiwanie na wykonanie działania w terenie": {"toDo": False, "print_only": True}
+            }
+
+            # Statusy końcowe (zawsze toDo: True)
+            STATUSY_ZAKONCZONE = {
+                "Zakończona (zakończona pozytywnie)": True,
+                "Odrzucona (zakończona negatywnie)": True,
+                "Anulowana (zakończona negatywnie)": True,
+            }
+
+            # Statusy wymagające weryfikacji nip/person
+            STATUSY_WERYFIKACYJNE = {
+                "Generowanie wydruku umowy - Odbiorcy": {"toDo": False, "toWeryfi_prawidlowe": False, "toWeryfi_nip_rozne": False},
+                "Oczekiwanie na zwrot umowy podpisanej przez klienta": {"toDo": False, "toWeryfi_prawidlowe": False, "toWeryfi_nip_rozne": False},
+                "Oczekiwanie na zgłoszenie umowy sprzedaży": {"toDo": False, "toWeryfi_prawidlowe": True, "toWeryfi_nip_rozne": True}
+            }
+
+            # Wszystkie statusy wymagające pełnej weryfikacji (z poprzedniego przykładu)
+            pelna_weryfikacja = [
+                "Oczekiwanie na wysłanie zlecenia OT",
+                "Pobranie danych ze sprawy referencyjnej", 
+                "Pobranie daty działania w terenie i aktualizacja daty umowy",
+                "Przekazanie parametrów umowy do SID",
+                "Weryfikacja aktualizacji parametrów odczytowych",
+                "Weryfikacja błędu wysłania aktywacji umowy do SID",
+                "Weryfikacja obowiązku informacyjnego",
+                "Weryfikacja typu subskrypcji",
+                "Weryfikacja zakładania subskrypcji",
+                "Wybór typu umowy",
+                "Weryfikacja anulowania zgłoszenia przez sprzedawcę"
+            ]
+
+            for data in table_data:
+                liczba_dni_minelo = self.ile_dni_minelo(data.get('CREATION_DTTM'))
+                status = data.get("STATUS")
+                typSprawy = data.get("TYP SPRAWY")
+                id = data.get("ID SPRAWY")
+
+                # Pomijamy inne typy spraw
+                if typSprawy != "Zawarcie umowy dystrybucyjnej z wniosku":
+                    continue
+
+                # Statusy końcowe
+                if status in STATUSY_ZAKONCZONE:
+                    rezult.append({"toDo": True, "mesage": status, "days": liczba_dni_minelo})
+                    continue
+
+                # Statusy proste (tylko dodanie wpisu)
+                if status in STATUSY_PROSTE:
+                    config = STATUSY_PROSTE[status]
+                    if config.get("print_only"):
+                        print({"toDo": config["toDo"], "mesage": status, "days": liczba_dni_minelo})
+                    else:
+                        rezult.append({"toDo": config["toDo"], "mesage": status, "days": liczba_dni_minelo})
+                    continue
+
+                # Statusy wymagające weryfikacji nip/person
+                if status in STATUSY_WERYFIKACYJNE:
+                    self._weryfikuj_sprawe(data, person_excel, nip_excel, rezult, liczba_dni_minelo, status, id, 
+                                        STATUSY_WERYFIKACYJNE[status])
+                    continue
+
+                # Statusy z pełną weryfikacją (jak w poprzednim przykładzie)
+                if status in pelna_weryfikacja:
+                    self._weryfikuj_sprawe(data, person_excel, nip_excel, rezult, liczba_dni_minelo, status, id, 
+                                        {"toDo": False, "toWeryfi_prawidlowe": True, "toWeryfi_nip_rozne": True})
+                    continue
+        else:
+            rezult.append({"toDo": True, "mesage": "Anulowana (zakończona negatywnie)", "days":"0"})
+
+        print("wynik: ", rezult)
+        return rezult
+
+
+    def _weryfikuj_sprawe(self, data, person_excel, nip_excel, rezult, liczba_dni_minelo, status, id, config):
+        """Wspólna metoda do weryfikacji nip i person"""
+        try:
+            idSpr = self.wait_for_element(data['ID SPRAWY'], "text")
+            idSpr.click()
+            self.reset_frame()
+            self.switch_iframe("tabPage")
+            self.switch_iframe("zoneMapFrame_1")
+            
+            person_link = self.wait_for_element('//*[@id="personId"]/a')
+            person_link.click()
+            self.reset_frame()
+            self.switch_iframe("tabPage")
+            self.switch_iframe("PER_NAME")
+            
+            person = self.wait_for_element('//*[@id="PER_NAME:0$ENTITY_NAME"]').get_attribute("value")
+            
+            self.reset_frame()
+            self.switch_iframe("tabPage")
+            self.switch_iframe("PER_IDENTIFIER")
+            
+            # Pobranie NIP z grida
+            grid_data = self.extract_oracle_grid_tab()
+            nip = None
+            for row in grid_data:
+                if row.get("TYP IDENTYFIKATORA") == "NIP":
+                    nip = row.get('NUMER IDENTYFIKACYJNY')
+                    break
+            
+            # Porównanie NIP i person
+            if str(nip).strip() == str(nip_excel).strip():
+                if person != person_excel:
+                    final_mesage = f"Dla sprawy od id: {id} nip jest zgodny lecz nazwy osoby są różne: wartość z CC&B: {person} | wartość z excel: {person_excel}"
+                    rezult.append({
+                        "toDo": False,
+                        "toWeryfi": True,
+                        "mesage": status,
+                        "days": liczba_dni_minelo,
+                        "person": person,
+                        "pesonExcel": person_excel,
+                        "nip": nip,
+                        "nip_excel": nip_excel,
+                        "final_mesage": final_mesage
+                    })
+                else:  # person == person_excel
+                    final_mesage = f"Dla sprawy od id: {id} nip jest zgodny oraz nazwy osoby są zgodne - sprawa o danych parametrach istnieje."
+                    rezult.append({
+                        "toDo": config["toDo"],
+                        "toWeryfi": config["toWeryfi_prawidlowe"],
+                        "mesage": status,
+                        "days": liczba_dni_minelo,
+                        "person": person,
+                        "pesonExcel": person_excel,
+                        "nip": nip,
+                        "nip_excel": nip_excel,
+                        "final_mesage": final_mesage
+                    })
+            else:  # NIP się nie zgadza
+                final_mesage = f"Dla sprawy od id: {id} nip jest inny - do weryfikacji zakładam sprawę"
+                rezult.append({
+                    "toDo": True,
+                    "toWeryfi": config["toWeryfi_nip_rozne"],
+                    "mesage": status,
+                    "days": liczba_dni_minelo,
+                    "person": person,
+                    "pesonExcel": person_excel,
+                    "nip": nip,
+                    "nip_excel": nip_excel,
+                    "final_mesage": final_mesage
+                })
+        
+        finally:
+            # Zawsze wracamy do poprzedniego widoku
+            self.reset_frame()
+            back_btn = self.wait_for_element('//*[@id="IM_GOBACK"]')
+            back_btn.click()
+            time.sleep(3)
+            back_btn.click()
+            time.sleep(3)
+            self.reset_frame()
+            self.switch_iframe("tabPage")
+        
+    
+    def createCase(self,Komentarze_sprawa,id_osoby,id_acc,user_odpowiedzialny,infoOosoba):
+        self.switch_iframe("uiMap")
+        typ_sprawy_select_box = self.wait_for_element('//*[@id="selectedCaseTypeByCisDiv"]')
+        typ_sprawy_select_box.click()
+        time.sleep(.5)
+        typ_sprawy = self.wait_for_element('Zawarcie umowy dystrybucyjnej z wniosku',"text")
+        self.driver.execute_script("arguments[0].scrollIntoView({block: 'center', behavior: 'smooth'});", typ_sprawy)
+        typ_sprawy.click()
+        ok_btn = self.wait_for_element('//*[@id="OK"]')
+        ok_btn.click()
+        time.sleep(1)
+        comments = self.wait_for_element('//*[@id="boGroup_longComments"]')
+        comments.send_keys(Komentarze_sprawa)
+
+
+        osoba_input = self.wait_for_element('//*[@id="boGroup_personId"]')
+        if(osoba_input.get_attribute("value") == "" or osoba_input.get_attribute("value")!=id_osoby):
+            osoba_input.clear()
+            time.sleep(.5)
+            osoba_input.send_keys(id_osoby)
+
+        konto_input = self.wait_for_element('//*[@id="boGroup_accountId"]')
+        if(konto_input.get_attribute("value") == "" or konto_input.get_attribute("value")!= id_acc):
+            konto_input.clear()
+            time.sleep(.5)
+            konto_input.send_keys(id_acc)
+
+        uzytkownik_odpowiedzialny = self.wait_for_element('//*[@id="boGroup_user"]')
+        time.sleep(.5)
+        uzytkownik_odpowiedzialny.send_keys(user_odpowiedzialny)
+        
+        info_kontakt_id_osoby = self.wait_for_element('//*[@id="boGroup_contactPerson"]')
+        if(infoOosoba != "nan"):
+            info_kontakt_id_osoby.clear()
+            time.sleep(.5)
+            info_kontakt_id_osoby.send_keys(infoOosoba)
+
+        
+                            
+        typ_rozliczenia_umowy_w_ppe =  self.wait_for_element('//*[@id="predefinedCharValue_0"]')
+        typ_rozliczenia_umowy_w_ppe.clear()
+        time.sleep(.5)
+        typ_rozliczenia_umowy_w_ppe.send_keys("ODB")
+        zapisz = self.wait_for_element('//*[@id="SAVE_BTN_MP"]')
+        zapisz.click()
+
+    def Formularz_obslugi_nowej_umowy_dystrybucyjnej_na_sprawie(self,data_wejscia_w_zycie_excel,charakter_odbioru_excel,przewidywany_zakup_energii_excel,grupa_taryfowa_excel,okres_rozliczeniowy_excel,moc_umowna_excel,moc_umowna_val_excel):
+        main_window = self.driver.current_window_handle
+        time.sleep(2)
+    
+        for handle in self.driver.window_handles:
+            if handle != main_window:
+                self.driver.switch_to.window(handle)
+                break
+
+        self.reset_frame()
+        self.switch_iframe('uiMap')
+       
+        znaleziony = False
+
+        while not znaleziony:
+         
+            # Sprawdzamy, czy tekst jest w treści strony
+            if self.wait_for_element('Formularz obsługi nowej umowy dystrybucyjnej na sprawie.',"text"):
+                print("Tekst się pojawił!")
+                znaleziony = True
+            else:
+                print("Szukam...")
+                time.sleep(1) 
+
+        data_zgloszenia = self.wait_for_element('//*[@id="cmFilingDate"]')
+        data_zgloszenia.clear()
+        time.sleep(.5)
+        aktualna_data_dt = datetime.now()
+        data_zgloszenia.send_keys(str(aktualna_data_dt.strftime("%d-%m-%Y")))
+
+
+        data_wejscia_w_zycie = self.wait_for_element('//*[@id="cmSaEffDate"]')
+        data_wejscia_w_zycie.click()
+        time.sleep(.5)
+        if(data_wejscia_w_zycie_excel != "nan"):
+            if(data_wejscia_w_zycie_excel == "ZO"):
+                time.sleep(1)
+                data_wejscia_w_zycie_wartosc = self.wait_for_element('data sprawdzenia układu pomiarowo-rozliczeniowego', "text")  
+                data_wejscia_w_zycie_wartosc.click()
+            elif (data_wejscia_w_zycie_excel == "ZS"):
+                time.sleep(1)
+                data_wejscia_w_zycie_wartosc = self.wait_for_element('rozwiązanie umowy kompleksowej w procesie zmiany sprzedawcy', "text")  
+                data_wejscia_w_zycie_wartosc.click()
+            else:
+                time.sleep(1)
+                data_wejscia_w_zycie_wartosc = self.wait_for_element('z dniem', "text")  
+                data_wejscia_w_zycie_wartosc.click()
+        else:
+            print('')
+ 
+
+
+        charakter_odbioru = self.wait_for_element('//*[@id="cmCharacterOfTheRecep"]')
+        charakter_odbioru.click()
+        time.sleep(1)
+        charakter_odbioru_wartość = self.wait_for_element(charakter_odbioru_excel,"text")
+        time.sleep(1)
+        charakter_odbioru_wartość.click()
+       
+
+        srzedawca_rezerwowy = self.wait_for_element('//*[@id="cmSellerReserves"]')
+        srzedawca_rezerwowy.clear()
+        time.sleep(.5)
+        srzedawca_rezerwowy.send_keys("2580413064")
+        
+        time.sleep(3)
+        
+        zgoda_na_udostepnienie_danych = self.wait_for_element('//*[@id="cmConsentShareDataDH"]')
+        time.sleep(.5)
+        zgoda_na_udostepnienie_danych.click()
+        time.sleep(.5)
+        zgoda_na_udostepnienie_danych.click()
+       
+        przewidywany_zakup_energii = self.wait_for_element('//*[@id="cmExpectedPowerPurchase"]')
+        przewidywany_zakup_energii.clear()
+        time.sleep(.5)
+        przewidywany_zakup_energii.send_keys(przewidywany_zakup_energii_excel)
+
+        grupa_taryfowa = self.wait_for_element('//*[@id="cmTariffGroup"]')
+        grupa_taryfowa.click()
+        time.sleep(1)
+        grupa_taryfowa_wartość = self.wait_for_element(grupa_taryfowa_excel, "text")
+        time.sleep(1)
+        grupa_taryfowa_wartość.click()
+
+        okres_rozliczeniowy  = self.wait_for_element('//*[@id="cmBillingPeriod"]')
+        okres_rozliczeniowy.click()
+        time.sleep(1)
+        okres_rozliczeniowy_wartość = self.wait_for_element(okres_rozliczeniowy_excel,"text")
+        time.sleep(1)
+        okres_rozliczeniowy_wartość.click()
+
+
+
+        moc_umowna = self.wait_for_element('//*[@id="cmContractualCapacity"]')
+        moc_umowna.click()
+        time.sleep(1)
+        print("szukany",moc_umowna_val_excel)
+        moc_umowna_val = self.wait_for_element(moc_umowna_val_excel,"text")
+        time.sleep(1)
+        moc_umowna_val.click()
+
+
+        moc_umowna_wartosc = self.wait_for_element('//*[@id="cmContractualCapacityValue_1"]')
+        moc_umowna_wartosc.clear()
+        moc_umowna_wartosc.send_keys(str(moc_umowna_excel).replace(".",",").strip())
+
+        zapisz = self.wait_for_element('/html/body/table[2]/tbody/tr/td/table/tbody/tr/td/input[1]')
+        zapisz.click()
+        time.sleep(10)
+                    
